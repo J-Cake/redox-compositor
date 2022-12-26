@@ -39,7 +39,7 @@ pub const SCHEME_NAME: &'static str = ":comp";
 pub const MAX_FPS: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 impl<'a, 'b> Compositor<'a, 'b> {
-    pub fn new(config: Config) -> Result<Compositor<'a, 'b>, String> {
+    pub fn new(config: Config) -> Result<Self, String> {
         let displays: Vec<Display> = config.displays.iter()
             .map(|(name, pos)| Display::new(&name, &pos)
                 .expect("Failed to create display"))
@@ -116,18 +116,10 @@ impl<'a, 'b> Compositor<'a, 'b> {
     }
 
     pub fn load_plugins(&mut self, plugins: &Vec<String>) -> Result<(), String> {
-        let mutex = Arc::new(Mutex::new(self));
-
         for i in plugins {
-            if let Ok(mut mgr) = mutex.lock() {
-                let Ok(plugin) = mgr.plugin_manager.load(i, Arc::clone(&mutex)) else {
-                    return Err(format!("Failed to load plugin {}", i));
-                };
-
-                println!("Successfully loaded {:#?}", i);
-            } else {
-                return Err(format!("Failed to acquire mutex lock"));
-            }
+            let Ok(plugin) = self.plugin_manager.load(i) else {
+                return Err(format!("Failed to load plugin {}", i));
+            };
         }
 
         Ok(())

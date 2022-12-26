@@ -12,7 +12,6 @@ raqote = { version = "0.8.1", features = [], default-features = false }
 euclid = "0.22.7"
 rusttype = "0.9.2"
 lazy_static = "1.4.0"
-#rusty_v8 = "0.32.1"
 rlua = "0.19.4"
 
 [[bin]]
