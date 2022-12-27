@@ -1,3 +1,4 @@
+use crate::frame::FrameMessenger;
 use crate::plugin::plugin::Plugin;
 
 mod plugin;
@@ -5,20 +6,20 @@ mod plugin;
 /// # public plugin API
 /// ## these functions can be exported as _hooks_
 /// 1. Frame
-///     * `on_frame_create(frame)`
-///     * `on_frame_destroy(frame)`
-///     * `on_frame_update(frame)`
+///     * `OnFrameCreate(frame)`
+///     * `OnFrameDestroy(frame)`
+///     * `OnFrameUpdate(frame)`
 /// 2. Mouse
-///     * `on_mouse_move(mouse)`
-///     * `on_mouse_down(button)`
-///     * `on_mouse_up(button)`
-///     * `on_mouse_scroll(delta)`
+///     * `OnMouseMove(mouse)`
+///     * `OnMouseDown(button)`
+///     * `OnMouseUp(button)`
+///     * `OnMouseScroll(delta)`
 /// 3. Keyboard
-///     * `on_key_down(key)`
-///     * `on_key_up(key)`
+///     * `OnKeyDown(key)`
+///     * `OnKeyUp(key)`
 /// 5. Plugin
-///     * `on_plugin_load(plugin)`
-///     * `on_before_plugin_unload(plugin)`
+///     * `OnPluginLoad(plugin)`
+///     * `OnBeforePluginUnload(plugin)`
 ///
 /// ## these functions can be called from the plugin
 /// 1. Frames
@@ -37,7 +38,7 @@ mod plugin;
 /// * `Buffer u32[]`
 
 pub struct PluginManager {
-    loaded: Vec<Plugin>
+    loaded: Vec<Plugin>,
 }
 
 impl PluginManager {
@@ -53,4 +54,40 @@ impl PluginManager {
         self.loaded.push(plugin);
         Ok(())
     }
+
+    pub fn event(&self, event: PluginEvent) {
+        // println!("Event: {:?}", event.clone());
+
+        for i in &self.loaded {
+            match event.clone() {
+                PluginEvent::OnFrameCreate(frame) => i.on_frame_create(frame),
+                PluginEvent::OnFrameDestroy(frame) => i.on_frame_destroy(frame),
+                PluginEvent::OnFrameUpdate(frame) => i.on_frame_update(frame),
+                PluginEvent::OnMouseMove(x, y) => i.on_mouse_move(x, y),
+                PluginEvent::OnMouseDown(btn) => i.on_mouse_down(btn),
+                PluginEvent::OnMouseUp(btn) => i.on_mouse_up(btn),
+                PluginEvent::OnMouseScroll(dx, dy) => i.on_mouse_scroll(dx, dy),
+                PluginEvent::OnKeyDown(key) => i.on_key_down(key),
+                PluginEvent::OnKeyUp(key) => i.on_key_up(key),
+                PluginEvent::OnPluginLoad() => i.on_plugin_load(),
+                PluginEvent::OnBeforePluginUnload() => i.on_before_plugin_unload(),
+                _ => todo!()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginEvent {
+    OnFrameCreate(FrameMessenger),
+    OnFrameDestroy(FrameMessenger),
+    OnFrameUpdate(FrameMessenger),
+    OnMouseMove(i32, i32),
+    OnMouseDown(u8),
+    OnMouseUp(u8),
+    OnMouseScroll(f32, f32),
+    OnKeyDown(u8),
+    OnKeyUp(u8),
+    OnPluginLoad(),
+    OnBeforePluginUnload(),
 }

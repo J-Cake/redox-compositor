@@ -9,7 +9,7 @@ pub struct Plugin {
 }
 
 macro_rules! handler {
-    ($name:ident, $($arg:ident: $val:ty),*) => {
+    ($name:ident$(,$arg:ident: $val:ty)*) => {
         pub fn $name(&self$(, $arg:$val)*) {
             self.lua.context(|ctx| -> rlua::Result<()> {
                 match ctx.named_registry_value::<_, rlua::Function>(stringify!($name)) {
@@ -23,20 +23,11 @@ macro_rules! handler {
             }).unwrap()
         }
     };
+}
 
-    ($name:ident) => {
-        pub fn $name(&self) {
-            self.lua.context(|ctx| -> rlua::Result<()> {
-                match ctx.named_registry_value::<_, rlua::Function>(stringify!($name)) {
-                    Err(_) => Ok(()),
-                    Ok(handler) => {
-                        handler.call::<_, ()>(())
-                            .unwrap();
-                        Ok(())
-                    },
-                }
-            }).unwrap()
-        }
+macro_rules! set_handler {
+    ($ctx:expr,$name:ident) => {
+        if let Ok(handler) = $ctx.globals().get::<_, rlua::Function>(stringify!($name)) { $ctx.set_named_registry_value(stringify!($name), handler).unwrap(); };
     }
 }
 
@@ -50,29 +41,27 @@ impl Plugin {
 
     pub fn run(&mut self) -> Result<(), String> {
         self.lua.context(|ctx| -> rlua::Result<()> {
-            let globals = ctx.globals();
             let mut source = String::new();
             self.source.read_to_string(&mut source).expect("Failed to read plugin source");
-            let Ok(_) = ctx.load(&source).exec() else { return Err(rlua::Error::BindError); };
+            if let Err(err) = ctx.load(&source).exec() {
+                return Err(err);
+            }
 
             // Frames
-            if let Ok(on_frame_create) = globals.get::<_, rlua::Function>("on_frame_create") { ctx.set_named_registry_value("on_frame_create", on_frame_create).unwrap(); };
-            if let Ok(on_frame_destroy) = globals.get::<_, rlua::Function>("on_frame_destroy") { ctx.set_named_registry_value("on_frame_destroy", on_frame_destroy).unwrap(); };
-            if let Ok(on_frame_update) = globals.get::<_, rlua::Function>("on_frame_update") { ctx.set_named_registry_value("on_frame_update", on_frame_update).unwrap(); };
-
+            set_handler!(ctx, on_frame_create);
+            set_handler!(ctx, on_frame_destroy);
+            set_handler!(ctx, on_frame_update);
             // Mouse
-            if let Ok(on_mouse_move) = globals.get::<_, rlua::Function>("on_mouse_move") { ctx.set_named_registry_value("on_mouse_move", on_mouse_move).unwrap(); };
-            if let Ok(on_mouse_down) = globals.get::<_, rlua::Function>("on_mouse_down") { ctx.set_named_registry_value("on_mouse_down", on_mouse_down).unwrap(); };
-            if let Ok(on_mouse_up) = globals.get::<_, rlua::Function>("on_mouse_up") { ctx.set_named_registry_value("on_mouse_up", on_mouse_up).unwrap(); };
-            if let Ok(on_mouse_scroll) = globals.get::<_, rlua::Function>("on_mouse_scroll") { ctx.set_named_registry_value("on_mouse_scroll", on_mouse_scroll).unwrap(); };
-
+            set_handler!(ctx, on_mouse_move);
+            set_handler!(ctx, on_mouse_down);
+            set_handler!(ctx, on_mouse_up);
+            set_handler!(ctx, on_mouse_scroll);
             // Keyboard
-            if let Ok(on_key_down) = globals.get::<_, rlua::Function>("on_key_down") { ctx.set_named_registry_value("on_key_down", on_key_down).unwrap(); };
-            if let Ok(on_key_up) = globals.get::<_, rlua::Function>("on_key_up") { ctx.set_named_registry_value("on_key_up", on_key_up).unwrap(); };
-
+            set_handler!(ctx, on_key_down);
+            set_handler!(ctx, on_key_up);
             // Plugin
-            if let Ok(on_plugin_load) = globals.get::<_, rlua::Function>("on_plugin_load") { ctx.set_named_registry_value("on_plugin_load", on_plugin_load).unwrap(); };
-            if let Ok(on_before_plugin_unload) = globals.get::<_, rlua::Function>("on_before_plugin_unload") { ctx.set_named_registry_value("on_before_plugin_unload", on_before_plugin_unload).unwrap(); };
+            set_handler!(ctx, on_plugin_load);
+            set_handler!(ctx, on_before_plugin_unload);
 
             Ok(())
         }).unwrap();

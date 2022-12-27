@@ -13,8 +13,6 @@ pub struct Frame<'a> {
     pub pos: IntPoint,
     pub surface: DrawTarget<&'a mut [u32]>,
     pub last_update: Instant,
-    // pub surface: Vec<u32>,
-    // pub size: Size2D<i32, UnknownUnit>,
     pub parent: Option<usize>,
     pub title: String,
 }
@@ -29,6 +27,12 @@ pub struct FrameMessenger {
     pub title: String,
 }
 
+/// Frames are _Windows_ to the client. They are anything the compositor displays. They capture and use input, and can be placed arbitrarily on the screen.
+/// Applications controlling frames typically use the following architecture:
+///  * Each client opens two buffers - front and back buffers.
+///  * The client draws to the back buffer, and then swaps the buffers.
+/// Optionally, the client can request a third, unrelated buffer be populated with the contents beneath the frame.
+/// - This can be used to create systems ranging from blurred backgrounds to screen readers.
 impl<'a> Frame<'a> {
     pub fn new(options: FrameOptions, id: usize) -> Result<Frame<'a>, i32> {
         let mut surface = unsafe {
@@ -255,6 +259,7 @@ impl FrameOptions {
 pub enum FrameRequest {
     Create(FrameOptions),
     Destroy(usize),
+    // TODO: Add request to fill background buffer
     SetTitle(usize, String),
     SetSize(usize, Size2D<i32, UnknownUnit>),
     SetPos(usize, Point2D<i32, UnknownUnit>),

@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::display::Display;
 use crate::frame::{Frame, FrameOptions};
 use crate::plugin;
-use crate::plugin::PluginManager;
+use crate::plugin::{PluginEvent, PluginManager};
 
 pub struct Compositor<'a, 'b> {
     pub displays: Vec<Display<'a>>,
@@ -134,11 +134,38 @@ impl<'a, 'b> Compositor<'a, 'b> {
             Err(err) => return Err(syscall::Error { errno: err }),
         };
 
-        return if let Some(frame) = self.frames.get(&id) {
-            Ok(frame)
-        } else {
-            Err(syscall::Error { errno: syscall::EINVAL })
+        let Some(frame) = self.frames.get(&id) else {
+            return Err(syscall::Error { errno: syscall::EINVAL });
         };
+
+        self.plugin_manager.event(PluginEvent::OnFrameCreate(frame.get_messenger()));
+
+        Ok(frame)
+    }
+
+    pub fn update(&mut self, id: usize) -> syscall::Result<()> {
+        if let Some(frame) = self.frames.get_mut(&id) {
+            frame.last_update = Instant::now();
+            frame.draw(&mut self.surface);
+            self.plugin_manager.event(PluginEvent::OnFrameUpdate(frame.get_messenger()));
+        } else {
+            return Err(syscall::Error::new(syscall::ENOENT));
+        }
+
+        Ok(())
+    }
+
+    pub fn close(&mut self, id: usize) -> syscall::Result<()> {
+        if !self.frames.contains_key(&id) {
+            return Err(syscall::Error {
+                errno: syscall::ENOENT,
+            });
+        }
+        if let Some(frame) = self.frames.remove(&id) {
+            self.plugin_manager.event(PluginEvent::OnFrameDestroy(frame.get_messenger()));
+        }
+
+        Ok(())
     }
 }
 
@@ -182,23 +209,10 @@ impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
     }
 
     fn fsync(&mut self, id: usize) -> syscall::Result<usize> {
-        if let Some(frame) = self.frames.get_mut(&id) {
-            frame.last_update = Instant::now();
-            frame.draw(&mut self.surface);
-        } else {
-            return Err(syscall::Error::new(syscall::ENOENT));
-        }
-
-        Ok(0)
+        self.update(id).map(|i| 0)
     }
 
     fn close(&mut self, id: usize) -> syscall::Result<usize> {
-        if !self.frames.contains_key(&id) {
-            return Err(syscall::Error {
-                errno: syscall::ENOENT,
-            });
-        }
-        self.frames.remove(&id);
-        Ok(0)
+        self.close(id).map(|i| 0)
     }
 }
