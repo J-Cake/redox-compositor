@@ -85,6 +85,8 @@ impl<'a, 'b> Compositor<'a, 'b> {
                     }
                 }
 
+                // self.plugin_manager.read_requests();
+
                 self.draw();
 
                 let elapsed = now.elapsed();
@@ -98,6 +100,9 @@ impl<'a, 'b> Compositor<'a, 'b> {
                     self.handle(&mut packet);
                     self.scheme.write(&packet).unwrap();
                 }
+
+                // self.plugin_manager.read_requests();
+
                 self.draw();
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -171,7 +176,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
 
 impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
     fn open(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
-        let options = match FrameOptions::new(path) {
+        let options = match FrameOptions::from_string(path) {
             Ok(options) => options,
             Err(err) => return Err(syscall::Error {
                 errno: syscall::EINVAL,

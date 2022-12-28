@@ -184,6 +184,24 @@ pub struct FrameOptions {
     pub parent: Option<usize>,
 }
 
+impl FrameOptions {
+    fn normalise(self) -> Self {
+        Self {
+            min_size: self.min_size,
+            max_size: self.max_size,
+            size: self.size.clamp(self.min_size, self.max_size),
+            pos: Point2D::new(self.pos.x.max(0), self.pos.y.max(0)),
+            title: self.title.clone(),
+            transparent: self.transparent,
+            can_minimise: self.can_minimise,
+            can_resize: self.can_resize,
+            can_close: self.can_close,
+            z_lock: self.z_lock.clone(),
+            parent: self.parent,
+        }
+    }
+}
+
 impl Default for FrameOptions {
     fn default() -> Self {
         Self {
@@ -202,6 +220,41 @@ impl Default for FrameOptions {
     }
 }
 
+impl<'lua> FromLua<'lua> for FrameOptions {
+    fn from_lua(lua_value: Value<'lua>, lua: Context<'lua>) -> rlua::Result<Self> {
+        match lua_value {
+            Value::Table(value) => Ok(Self {
+                min_size: value.get::<_, Table>("min_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
+                max_size: value.get::<_, Table>("max_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
+                size: value.get::<_, Table>("size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
+                pos: value.get::<_, Table>("pos").map(|v| Point2D::new(v.get::<_, i32>("x").unwrap(), v.get::<_, i32>("y").unwrap())).unwrap_or_default(),
+                title: value.get("title").unwrap_or_default(),
+                transparent: value.get("transparent").unwrap_or_default(),
+                can_minimise: value.get("can_minimise").unwrap_or_default(),
+                can_resize: value.get("can_resize").unwrap_or_default(),
+                can_close: value.get("can_close").unwrap_or_default(),
+                z_lock: {
+                    match value.get("z_lock") {
+                        Ok(Value::String(s)) => match s.to_str().unwrap() {
+                            "back" => ZIndex::Back,
+                            "auto" => ZIndex::Auto,
+                            "front" => ZIndex::Front,
+                            _ => ZIndex::Auto,
+                        },
+                        _ => ZIndex::Auto,
+                    }
+                },
+                parent: value.get("parent").unwrap_or_default(),
+            }.normalise()),
+            _ => Err(rlua::Error::FromLuaConversionError {
+                message: Some("Expected Table".to_owned()),
+                from: "FrameOptions",
+                to: "FrameOptions",
+            })
+        }
+    }
+}
+
 fn parse_coord(str: &str) -> (i32, i32) {
     let mut parts = str.split(',');
     let x = parts.next().unwrap_or("").parse::<i32>().unwrap_or(0);
@@ -210,7 +263,7 @@ fn parse_coord(str: &str) -> (i32, i32) {
 }
 
 impl FrameOptions {
-    pub fn new(src: &str) -> Result<Self, String> {
+    pub fn from_string(src: &str) -> Result<Self, String> {
         let mut options = FrameOptions::default();
 
         for option in src.split('&') {
@@ -256,6 +309,7 @@ impl FrameOptions {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum FrameRequest {
     Create(FrameOptions),
     Destroy(usize),
@@ -271,6 +325,7 @@ pub enum FrameRequest {
     SetTransparent(usize, bool),
 }
 
+#[derive(Debug, Clone)]
 pub enum FrameEvent<'a> {
     Created(&'a FrameMessenger),
     Destroyed(usize),
@@ -294,7 +349,7 @@ impl<'lua> FromLua<'lua> for FrameRequest {
             match action.as_str() {
                 "create" => {
                     let options = value.get::<_, String>("options").unwrap();
-                    let options = FrameOptions::new(&options).unwrap();
+                    let options = FrameOptions::from_string(&options).unwrap();
                     Ok(FrameRequest::Create(options))
                 }
                 "destroy" => Ok(FrameRequest::Destroy(id)),
@@ -303,13 +358,13 @@ impl<'lua> FromLua<'lua> for FrameRequest {
                     Ok(FrameRequest::SetTitle(id, title))
                 }
                 "set-size" => {
-                    let size = value.get::<_, String>("size").unwrap();
-                    let size = Size2D::from(parse_coord(&size));
+                    let size = value.get::<_, Table>("size").unwrap();
+                    let size = Size2D::new(size.get("x").unwrap(), size.get("y").unwrap());
                     Ok(FrameRequest::SetSize(id, size))
                 }
                 "set-pos" => {
-                    let pos = value.get::<_, String>("pos").unwrap();
-                    let pos = Point2D::from(parse_coord(&pos));
+                    let pos = value.get::<_, Table>("pos").unwrap();
+                    let pos = Point2D::new(pos.get("x").unwrap(), pos.get("y").unwrap());
                     Ok(FrameRequest::SetPos(id, pos))
                 }
                 "set-parent" => {

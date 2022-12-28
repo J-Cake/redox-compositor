@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use std::cell::RefCell;
 use raqote::{DrawTarget, SolidSource};
 use crate::compositor::Compositor;
@@ -13,7 +15,6 @@ fn main() {
     redox_daemon::Daemon::new(move |daemon| {
         daemon.ready().expect("erika: failed to notify parent");
 
-        // let mut dt = RefCell::new(DrawTarget::new(0, 0));
         let config = config::load()
             .expect("Failed to fetch config");
         let mut ctx = Compositor::new(config.clone())

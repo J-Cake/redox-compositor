@@ -1,4 +1,11 @@
-use crate::frame::FrameMessenger;
+use std::sync::{mpsc, Mutex};
+use std::sync::mpsc::{Receiver, Sender};
+
+use euclid::{Point2D, Size2D, UnknownUnit};
+use raqote::IntPoint;
+
+use crate::compositor::Compositor;
+use crate::frame::{FrameMessenger, FrameOptions};
 use crate::plugin::plugin::Plugin;
 
 mod plugin;
@@ -27,8 +34,8 @@ mod plugin;
 ///     * `get_frame_by_id(id)`
 ///     * `close_frame(id)`
 /// 2. Input
-///     * `get_mouse()`
-///     * `get_key(key)`
+///     * `get_mouse() -> Mouse`
+///     * `get_keys() -> Keys`
 /// 3. Painting
 ///     * `paint_buffer(buffer, pos, size)`
 ///
@@ -36,9 +43,16 @@ mod plugin;
 /// * `Frame {id, title, x, y, w, h, parent() -> Frame, get_buffer() -> Buffer, send_event(Event), close()}`
 /// * `Event {type, x, y, button, key, delta}`
 /// * `Buffer u32[]`
+/// * `Mouse {x, y, buttons, scroll_delta}`
+/// * `Keys {pressed, released}`
+
+struct Channel {
+    pub sender: Sender<PluginResponse>,
+    pub receiver: Receiver<PluginRequest>,
+}
 
 pub struct PluginManager {
-    loaded: Vec<Plugin>,
+    loaded: Vec<(Plugin, Channel)>,
 }
 
 impl PluginManager {
@@ -49,30 +63,47 @@ impl PluginManager {
     }
 
     pub fn load(&mut self, path: &str) -> Result<(), String> {
-        let mut plugin = Plugin::new(path)?;
+        let request = mpsc::channel::<PluginRequest>();
+        let response = mpsc::channel::<PluginResponse>();
+
+        let mut plugin = Plugin::new(path, request.0, response.1)?;
         plugin.run().unwrap();
-        self.loaded.push(plugin);
+        self.loaded.push((plugin, Channel {
+            sender: response.0,
+            receiver: request.1,
+        }));
+
         Ok(())
     }
 
     pub fn event(&self, event: PluginEvent) {
-        // println!("Event: {:?}", event.clone());
-
-        for i in &self.loaded {
+        for (plugin,_) in &self.loaded {
             match event.clone() {
-                PluginEvent::OnFrameCreate(frame) => i.on_frame_create(frame),
-                PluginEvent::OnFrameDestroy(frame) => i.on_frame_destroy(frame),
-                PluginEvent::OnFrameUpdate(frame) => i.on_frame_update(frame),
-                PluginEvent::OnMouseMove(x, y) => i.on_mouse_move(x, y),
-                PluginEvent::OnMouseDown(btn) => i.on_mouse_down(btn),
-                PluginEvent::OnMouseUp(btn) => i.on_mouse_up(btn),
-                PluginEvent::OnMouseScroll(dx, dy) => i.on_mouse_scroll(dx, dy),
-                PluginEvent::OnKeyDown(key) => i.on_key_down(key),
-                PluginEvent::OnKeyUp(key) => i.on_key_up(key),
-                PluginEvent::OnPluginLoad() => i.on_plugin_load(),
-                PluginEvent::OnBeforePluginUnload() => i.on_before_plugin_unload(),
-                _ => todo!()
+                PluginEvent::OnFrameCreate(frame) => plugin.on_frame_create(frame),
+                PluginEvent::OnFrameDestroy(frame) => plugin.on_frame_destroy(frame),
+                PluginEvent::OnFrameUpdate(frame) => plugin.on_frame_update(frame),
+                PluginEvent::OnMouseMove(x, y) => plugin.on_mouse_move(x, y),
+                PluginEvent::OnMouseDown(btn) => plugin.on_mouse_down(btn),
+                PluginEvent::OnMouseUp(btn) => plugin.on_mouse_up(btn),
+                PluginEvent::OnMouseScroll(dx, dy) => plugin.on_mouse_scroll(dx, dy),
+                PluginEvent::OnKeyDown(key) => plugin.on_key_down(key),
+                PluginEvent::OnKeyUp(key) => plugin.on_key_up(key),
+                PluginEvent::OnPluginLoad() => plugin.on_plugin_load(),
+                PluginEvent::OnBeforePluginUnload() => plugin.on_before_plugin_unload()
             }
+        }
+    }
+
+    pub fn read_requests(&mut self) {
+        for (plugin, channel) in self.loaded.iter_mut() {
+            if let Ok(req) = channel.receiver.try_recv() {
+                println!("Received Request: {:?}", req);
+                // match req {
+                //     _ => todo!()
+                // }
+            }
+
+            plugin.receive_responses();
         }
     }
 }
@@ -90,4 +121,23 @@ pub enum PluginEvent {
     OnKeyUp(u8),
     OnPluginLoad(),
     OnBeforePluginUnload(),
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginRequest {
+    CreateFrame(FrameOptions),
+    GetFrameById(u32),
+    CloseFrame(u32),
+    GetMouse(),
+    GetKeys(),
+    PaintBuffer(Vec<u32>, Point2D<i32, UnknownUnit>, Size2D<i32, UnknownUnit>),
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginResponse {
+    Frame(usize, FrameMessenger),
+    Mouse(usize, IntPoint, u8, f32),
+    Keys(usize, Vec<u8>, Vec<u8>),
+    Buffer(usize, Vec<u32>),
+    None(usize),
 }

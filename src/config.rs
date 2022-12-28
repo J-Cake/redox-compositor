@@ -9,6 +9,6 @@ pub struct Config {
 pub(crate) fn load() -> Result<Config, String> {
     Ok(Config {
         displays: vec![("display:3/activate".to_owned(), IntPoint::new(0, 0))],
-        plugins: vec!["/home/user/plugins/example.lua".to_owned()]
+        plugins: vec!["/home/user/plugins/example2.lua".to_owned()]
     })
 }

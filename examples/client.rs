@@ -16,7 +16,7 @@ fn main() {
     let mut ctx = unsafe {
         let ptr = syscall::fmap(win.as_raw_fd() as usize, &syscall::Map {
             offset: 0,
-            size: 200 * 160 * 4,
+            size: ((200 * 160 * 4) as usize + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1),
             flags: syscall::PROT_READ | syscall::PROT_WRITE,
             address: 0,
         }).unwrap();

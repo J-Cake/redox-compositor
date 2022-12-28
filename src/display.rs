@@ -45,6 +45,8 @@ impl<'a> Display<'a> {
              path_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0))
         };
 
+        println!("Opening display: {} - {}x{}", String::from_utf8_lossy(&buf[..count]), &width, &height);
+
         let mut surface = unsafe {
             let ptr = syscall::fmap(backing.as_raw_fd() as usize, &syscall::Map {
                 offset: 0,

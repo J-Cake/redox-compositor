@@ -1,11 +1,26 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver, Sender};
 
-use crate::frame::{Frame, FrameMessenger, FrameOptions};
+use crate::frame::{Frame, FrameMessenger, FrameOptions, FrameRequest};
+use crate::plugin::{PluginRequest, PluginResponse};
+
+/// Channels allow us to communicate across threads.
+/// In the circumstance where Lua happens to call a provided method from another thread, this will cause race conditions, so we fall back to a callback-architecture
+/// Implemented by messaging the main thread which does the execution and awaiting the response.
+struct Channel {
+    sender: Sender<PluginRequest>,
+    receiver: Receiver<PluginResponse>,
+    events: Arc<Mutex<HashMap<usize, rlua::RegistryKey>>>,
+}
 
 pub struct Plugin {
     pub source: File,
     pub lua: rlua::Lua,
+
+    channel: Channel,
 }
 
 macro_rules! handler {
@@ -32,16 +47,37 @@ macro_rules! set_handler {
 }
 
 impl Plugin {
-    pub fn new(path: &str) -> Result<Self, String> {
+    pub fn new(path: &str, sender: Sender<PluginRequest>, receiver: Receiver<PluginResponse>) -> Result<Self, String> {
         Ok(Self {
             source: File::open(path).map_err(|_| format!("Unable to open plugin {}", path))?,
             lua: rlua::Lua::new(),
+            channel: Channel {
+                sender,
+                receiver,
+                events: Arc::new(Mutex::new(HashMap::new()))
+            },
         })
     }
 
     pub fn run(&mut self) -> Result<(), String> {
         self.lua.context(|ctx| -> rlua::Result<()> {
             let mut source = String::new();
+
+            {
+                let globals = ctx.globals();
+
+                let events = Arc::clone(&self.channel.events);
+                let sender = self.channel.sender.clone();
+
+                globals.set("create_frame", ctx.create_function(move |_, (options, on_create): (FrameOptions, rlua::Function)| -> rlua::Result<()> {
+                    // let mut events = events.lock().unwrap();
+                    // events.insert(events.len() as u128, ctx.create_registry_value(on_create)?);
+                    sender.send(PluginRequest::CreateFrame(options)).unwrap();
+
+                    Ok(())
+                }).unwrap()).unwrap();
+            };
+
             self.source.read_to_string(&mut source).expect("Failed to read plugin source");
             if let Err(err) = ctx.load(&source).exec() {
                 return Err(err);
@@ -70,6 +106,22 @@ impl Plugin {
         self.on_plugin_load();
 
         Ok(())
+    }
+
+    pub fn receive_responses(&mut self) {
+        while let Ok(response) = self.channel.receiver.try_recv() {
+            match response {
+                PluginResponse::Frame(req, _) => {
+                    if let Some(event) = self.channel.events.lock().unwrap().remove(&req) {
+                        self.lua.context(|ctx| -> rlua::Result<()> {
+                            ctx.registry_value::<rlua::Function>(&event).unwrap().call::<_, ()>(()).unwrap();
+                            Ok(())
+                        }).unwrap();
+                    }
+                }
+                _ => todo!()
+            }
+        }
     }
 
     handler!(on_frame_create, frame: FrameMessenger);
