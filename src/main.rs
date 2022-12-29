@@ -19,6 +19,7 @@ fn main() {
             .expect("Failed to fetch config");
         let mut ctx = Compositor::new(config.clone())
             .expect("Failed to create compositor");
+
         ctx.load_plugins(&config.plugins)
             .expect("Failed to load plugins");
 

@@ -45,6 +45,8 @@ impl<'a, 'b> Compositor<'a, 'b> {
                 .expect("Failed to create display"))
             .collect();
 
+        println!("Created {} displays", displays.len());
+
         let mut min = (0, 0);
         let mut max = (0, 0);
 
