@@ -3,10 +3,12 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::mem;
+use std::mem::MaybeUninit;
 use std::os::fd::{FromRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::sync::mpsc::channel;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use euclid::Size2D;
@@ -17,11 +19,11 @@ use syscall::{Map, O_NONBLOCK, Packet, SchemeMut};
 
 use crate::config::Config;
 use crate::display::Display;
-use crate::frame::{Frame, FrameOptions};
+use crate::frame::{Frame, FrameEvent, FrameOptions};
 use crate::plugin;
 use crate::plugin::{PluginEvent, PluginManager};
 
-pub struct Compositor<'a, 'b> {
+pub struct Compositor<'a, 'b, 'c> {
     pub displays: Vec<Display<'a>>,
 
     pub frames: HashMap<usize, Frame<'b>>,
@@ -32,14 +34,16 @@ pub struct Compositor<'a, 'b> {
 
     pub scheme: File,
 
-    pub plugin_manager: PluginManager,
+    last_update: Instant,
+
+    on_receive_event: Box<dyn FnMut(PluginEvent) + 'c>,
 }
 
 pub const SCHEME_NAME: &'static str = ":comp";
 pub const MAX_FPS: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-impl<'a, 'b> Compositor<'a, 'b> {
-    pub fn new(config: Config) -> Result<Self, String> {
+impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
+    pub fn new(config: Config, on_receive_event: Box<dyn FnMut(PluginEvent) + 'c>) -> Result<Self, String> {
         let displays: Vec<Display> = config.displays.iter()
             .map(|(name, pos)| Display::new(&name, &pos)
                 .expect("Failed to create display"))
@@ -56,6 +60,8 @@ impl<'a, 'b> Compositor<'a, 'b> {
         });
 
         Ok(Compositor {
+            last_update: Instant::now() - MAX_FPS,
+            on_receive_event,
             displays,
             frames: HashMap::new(),
             surface: DrawTarget::new(max.0 - min.0, max.1 - min.1),
@@ -67,48 +73,24 @@ impl<'a, 'b> Compositor<'a, 'b> {
                         .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
                         .unwrap()
                 }),
-            plugin_manager: PluginManager::new(),
         })
     }
 
-    pub fn run(&mut self) {
-        loop {
-            if self.frames.len() > 0 {
-                // To indicate that the reference is still valid.
-                // println!("SizeOf Surface: {:#?}\n\n", mem::size_of_val(self.surface));
+    pub fn tick(&mut self) {
+        if self.last_update.elapsed() < MAX_FPS {
+            return;
+        }
 
-                let now = Instant::now();
-                let mut packet = Packet::default();
-
-                if let Ok(len) = self.scheme.read(&mut packet) {
-                    if len > 0 {
-                        self.handle(&mut packet);
-                        self.scheme.write(&packet).unwrap();
-                    }
-                }
-
-                // self.plugin_manager.read_requests();
-
-                self.draw();
-
-                let elapsed = now.elapsed();
-                if elapsed < MAX_FPS {
-                    std::thread::sleep(MAX_FPS - elapsed);
-                }
-            } else {
-                self.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
-                let mut packet = Packet::default();
-                if let Ok(num) = self.scheme.read(&mut packet) {
-                    self.handle(&mut packet);
-                    self.scheme.write(&packet).unwrap();
-                }
-
-                // self.plugin_manager.read_requests();
-
-                self.draw();
-                std::thread::sleep(Duration::from_millis(100));
+        let mut packet = Packet::default();
+        if let Ok(len) = self.scheme.read(&mut packet) {
+            if len > 0 {
+                self.handle(&mut packet);
+                self.scheme.write(&packet).unwrap();
             }
         }
+
+        self.draw();
+        self.last_update = Instant::now();
     }
 
     pub fn draw(&mut self) {
@@ -120,16 +102,6 @@ impl<'a, 'b> Compositor<'a, 'b> {
 
     pub fn get_layout(&self) -> Vec<IntRect> {
         self.displays.iter().map(|i| IntRect::from_origin_and_size(i.pos, Size2D::new(i.surface.width(), i.surface.height()))).collect()
-    }
-
-    pub fn load_plugins(&mut self, plugins: &Vec<String>) -> Result<(), String> {
-        for i in plugins {
-            let Ok(plugin) = self.plugin_manager.load(i) else {
-                return Err(format!("Failed to load plugin {}", i));
-            };
-        }
-
-        Ok(())
     }
 
     pub fn mk_frame(&mut self, options: FrameOptions) -> syscall::Result<&Frame> {
@@ -145,16 +117,18 @@ impl<'a, 'b> Compositor<'a, 'b> {
             return Err(syscall::Error { errno: syscall::EINVAL });
         };
 
-        self.plugin_manager.event(PluginEvent::OnFrameCreate(frame.get_messenger()));
+        self.on_receive_event.call_mut((PluginEvent::OnFrameCreate(frame.get_messenger()),));
 
         Ok(frame)
     }
 
-    pub fn update(&mut self, id: usize) -> syscall::Result<()> {
+    fn update_frame(&mut self, id: usize) -> syscall::Result<()> {
         if let Some(frame) = self.frames.get_mut(&id) {
             frame.last_update = Instant::now();
             frame.draw(&mut self.surface);
-            self.plugin_manager.event(PluginEvent::OnFrameUpdate(frame.get_messenger()));
+
+            self.on_receive_event.call_mut((PluginEvent::OnFrameUpdate(frame.get_messenger()),));
+
         } else {
             return Err(syscall::Error::new(syscall::ENOENT));
         }
@@ -169,14 +143,14 @@ impl<'a, 'b> Compositor<'a, 'b> {
             });
         }
         if let Some(frame) = self.frames.remove(&id) {
-            self.plugin_manager.event(PluginEvent::OnFrameDestroy(frame.get_messenger()));
+            self.on_receive_event.call_mut((PluginEvent::OnFrameDestroy(frame.get_messenger()),));
         }
 
         Ok(())
     }
 }
 
-impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
+impl<'a, 'b, 'c> SchemeMut for Compositor<'a, 'b, 'c> {
     fn open(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let options = match FrameOptions::from_string(path) {
             Ok(options) => options,
@@ -205,7 +179,7 @@ impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
             let map_pages = (map.offset + map.size + (syscall::PAGE_SIZE - 1)) / syscall::PAGE_SIZE;
             let (data_addr, len) = frame.mut_ptr();
 
-            if map_pages * syscall::PAGE_SIZE >= len * mem::size_of::<u32>() {
+            if map_pages * syscall::PAGE_SIZE >= len * std::mem::size_of::<u32>() {
                 Ok((data_addr as usize) + map.offset)
             } else {
                 Err(syscall::Error::new(syscall::EINVAL))
@@ -216,7 +190,7 @@ impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
     }
 
     fn fsync(&mut self, id: usize) -> syscall::Result<usize> {
-        self.update(id).map(|i| 0)
+        self.update_frame(id).map(|i| 0)
     }
 
     fn close(&mut self, id: usize) -> syscall::Result<usize> {

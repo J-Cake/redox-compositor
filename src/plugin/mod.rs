@@ -1,10 +1,15 @@
+use std::cell::{Ref, RefCell};
+use std::mem::MaybeUninit;
+use std::rc::Rc;
 use std::sync::{mpsc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 
 use euclid::{Point2D, Size2D, UnknownUnit};
 use raqote::IntPoint;
 
-use crate::compositor::Compositor;
+use crate::compositor::{Compositor, MAX_FPS};
+use crate::config::Config;
 use crate::frame::{FrameMessenger, FrameOptions};
 use crate::plugin::plugin::Plugin;
 
@@ -51,15 +56,22 @@ struct Channel {
     pub receiver: Receiver<PluginRequest>,
 }
 
-pub struct PluginManager {
+pub struct PluginManager<'a, 'b, 'c> {
     loaded: Vec<(Plugin, Channel)>,
+    comp: Compositor<'a, 'b, 'c>,
 }
 
-impl PluginManager {
-    pub fn new() -> Self {
-        Self {
-            loaded: vec![]
-        }
+impl<'a, 'b, 'c> PluginManager<'a, 'b, 'c> {
+    pub fn new(config: Config) -> Result<Self, String> {
+        let mut mgr = Self {
+            loaded: Vec::new(),
+            comp: Compositor::new(config.clone(), Box::new(|event| PluginManager::event(&mut mgr, event)))
+                .expect("Failed to create Compositor"),
+        };
+
+        mgr.comp.tick();
+
+        Ok(mgr)
     }
 
     pub fn load(&mut self, path: &str) -> Result<(), String> {
@@ -76,8 +88,20 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn event(&self, event: PluginEvent) {
-        for (plugin,_) in &self.loaded {
+    pub(crate) fn run(&mut self) {
+        loop {
+            let now = std::time::Instant::now();
+            self.comp.tick();
+            self.read_requests();
+            let elapsed = now.elapsed();
+            if elapsed < MAX_FPS {
+                thread::sleep(MAX_FPS - elapsed);
+            }
+        }
+    }
+
+    pub fn event(&mut self, event: PluginEvent) {
+        for (plugin, _) in &self.loaded {
             match event.clone() {
                 PluginEvent::OnFrameCreate(frame) => plugin.on_frame_create(frame),
                 PluginEvent::OnFrameDestroy(frame) => plugin.on_frame_destroy(frame),
@@ -92,19 +116,32 @@ impl PluginManager {
                 PluginEvent::OnBeforePluginUnload() => plugin.on_before_plugin_unload()
             }
         }
+
+        self.comp.tick();
     }
 
     pub fn read_requests(&mut self) {
         for (plugin, channel) in self.loaded.iter_mut() {
             if let Ok(req) = channel.receiver.try_recv() {
                 println!("Received Request: {:?}", req);
-                // match req {
-                //     _ => todo!()
-                // }
+                match req {
+                    PluginRequest::CreateFrame(options) => {}
+                    _ => todo!()
+                }
             }
 
             plugin.receive_responses();
         }
+    }
+
+    pub fn load_plugins(&mut self, plugins: &Vec<String>) -> Result<(), String> {
+        for i in plugins {
+            let Ok(plugin) = self.load(i) else {
+                return Err(format!("Failed to load plugin {}", i));
+            };
+        }
+
+        Ok(())
     }
 }
 

@@ -95,8 +95,6 @@ impl<'a> Display<'a> {
     }
 
     pub fn draw(&mut self, surface: &mut DrawTarget) {
-        // DrawTarget::from_backing(self.size.width, self.size.height, &mut self.surface)
-        //     .copy_surface(surface, IntRect::from_origin_and_size(self.pos, self.size), IntPoint::new(0, 0));
         let size = Size2D::new(self.surface.width(), self.surface.height());
         self.surface.copy_surface(surface, IntRect::from_origin_and_size(self.pos, size), IntPoint::new(0, 0));
 

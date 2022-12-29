@@ -1,8 +1,13 @@
+#![feature(new_uninit)]
+#![feature(fn_traits)]
 #![allow(warnings)]
 
-use std::cell::RefCell;
+use std::borrow::BorrowMut;
+use std::cell::{RefCell, RefMut};
+use std::rc::Rc;
 use raqote::{DrawTarget, SolidSource};
 use crate::compositor::Compositor;
+use crate::plugin::PluginManager;
 
 mod compositor;
 mod display;
@@ -17,17 +22,13 @@ fn main() {
 
         let config = config::load()
             .expect("Failed to fetch config");
-        let mut ctx = Compositor::new(config.clone())
-            .expect("Failed to create compositor");
+        let mut mgr = PluginManager::new(config.clone())
+            .expect("Failed to create Plugin Manager");
 
-        ctx.load_plugins(&config.plugins)
+        mgr.load_plugins(&config.plugins)
             .expect("Failed to load plugins");
 
-        // clear the surface
-        ctx.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0xff, 0xff, 0xff));
-        ctx.draw();
-
-        ctx.run();
+        mgr.run();
 
         std::process::exit(0);
     }).expect("Failed to launch compositor");
