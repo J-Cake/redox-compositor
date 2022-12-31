@@ -7,6 +7,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
+use euclid::default::{Point2D, Size2D};
+use raqote::Point;
 
 use crate::frame::{Frame, FrameMessenger, FrameOptions, FrameRequest};
 use crate::plugin::{PluginRequest, PluginResponse};
@@ -17,7 +19,7 @@ pub(crate) type MessageID = rlua::RegistryKey;
 /// In the circumstance where Lua happens to call a provided method from another thread, this will cause race conditions, so we fall back to a callback-architecture
 /// Implemented by messaging the main thread which does the execution and awaiting the response.
 struct Channel {
-    sender: Sender<(MessageID, PluginRequest)>,
+    request: Sender<(MessageID, PluginRequest)>,
     receiver: Receiver<(MessageID, PluginResponse)>,
     event_id: Counter<usize>,
     reg_key: HashMap<MessageID, rlua::RegistryKey>,
@@ -67,7 +69,6 @@ macro_rules! handler {
         }
     };
 }
-
 macro_rules! set_handler {
     ($ctx:expr,$name:ident) => {
         if let Ok(handler) = $ctx.globals().get::<_, rlua::Function>(stringify!($name)) { $ctx.set_named_registry_value(stringify!($name), handler).unwrap(); };
@@ -85,7 +86,7 @@ impl Plugin {
             registry_key: Arc::new(reg),
             channel: Channel {
                 event_id: Counter::new(0usize, 1usize),
-                sender,
+                request: sender,
                 receiver,
                 reg_key: HashMap::new(),
             },
@@ -97,22 +98,54 @@ impl Plugin {
         self.source.read_to_string(&mut source)
             .expect("Failed to read plugin source");
 
-        let sender = self.channel.sender.clone();
+        let request = self.channel.request.clone();
 
         self.lua.context(|ctx| -> rlua::Result<()> {
             let globals = ctx.globals();
 
+            let request = self.channel.request.clone();
             globals.set("create_frame", ctx.create_function(move |ctx, (options, on_create): (FrameOptions, rlua::Function)| -> rlua::Result<()> {
-                // Move the `on_create` callback into the plugin registry
                 let registry_key = ctx.create_registry_value(on_create).unwrap();
+                request.send((registry_key, PluginRequest::CreateFrame(options))).unwrap();
+                Ok(())
+            }).unwrap()).unwrap();
 
-                // The event handler is the plugin manager. It is responsible for performing the actions indicated by the `PluginRequest` object.
-                // The RegistryKey is included in each request/response pair so the plugin is able to call the correct callback.
-                // These are unique to the plugin's lua context and subsequently the plugin itself.
+            let request = self.channel.request.clone();
+            globals.set("get_frame_by_id", ctx.create_function(move |ctx, (id, callback): (usize, rlua::Function)| -> rlua::Result<()> {
+                let registry_key = ctx.create_registry_value(id).unwrap();
+                request.send((registry_key, PluginRequest::GetFrameById(id))).unwrap();
+                Ok(())
+            }).unwrap()).unwrap();
 
-                // Dispatch the actual event
-                sender.send((registry_key, PluginRequest::CreateFrame(options))).unwrap();
+            let request = self.channel.request.clone();
+            globals.set("close_frame", ctx.create_function(move |ctx, (id, callback): (usize, rlua::Function)| -> rlua::Result<()> {
+                let registry_key = ctx.create_registry_value(id).unwrap();
+                request.send((registry_key, PluginRequest::CloseFrame(id))).unwrap();
+                Ok(())
+            }).unwrap()).unwrap();
 
+            let request = self.channel.request.clone();
+            globals.set("get_mouse", ctx.create_function(move |ctx, (callback): (rlua::Function)| -> rlua::Result<()> {
+                let registry_key = ctx.create_registry_value(callback).unwrap();
+                request.send((registry_key, PluginRequest::GetMouse())).unwrap();
+                Ok(())
+            }).unwrap()).unwrap();
+
+            let request = self.channel.request.clone();
+            globals.set("get_keys", ctx.create_function(move |ctx, (callback): (rlua::Function)| -> rlua::Result<()> {
+                let registry_key = ctx.create_registry_value(callback).unwrap();
+                request.send((registry_key, PluginRequest::GetKeys())).unwrap();
+                Ok(())
+            }).unwrap()).unwrap();
+
+            let request = self.channel.request.clone();
+            globals.set("paint_buffer", ctx.create_function(move |ctx, (buffer, point, size, callback): (Vec<u32>, rlua::Table, rlua::Table, rlua::Function)| -> rlua::Result<()> {
+                let registry_key = ctx.create_registry_value(callback).unwrap();
+
+                let p = Point2D::new(point.get::<_, i32>("x").unwrap_or(0), point.get::<_, i32>("y").unwrap_or(0));
+                let s = Size2D::new(size.get::<_, i32>("width").unwrap_or(0), size.get::<_, i32>("height").unwrap_or(0));
+
+                request.send((registry_key, PluginRequest::PaintBuffer(buffer, p, s))).unwrap();
                 Ok(())
             }).unwrap()).unwrap();
 

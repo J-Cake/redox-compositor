@@ -53,7 +53,7 @@ mod plugin;
 /// * `Keys {pressed, released}`
 
 struct Channel {
-    pub sender: Sender<(MessageID, PluginResponse)>,
+    pub response: Sender<(MessageID, PluginResponse)>,
     pub receiver: Receiver<(MessageID, PluginRequest)>,
 }
 
@@ -85,7 +85,7 @@ impl<'a, 'b> PluginManager<'a, 'b> {
         let mut plugin = Plugin::new(path, request.0, response.1)?;
         plugin.run().unwrap();
         self.loaded.push((plugin, Channel {
-            sender: response.0,
+            response: response.0,
             receiver: request.1,
         }));
 
@@ -131,8 +131,11 @@ impl<'a, 'b> PluginManager<'a, 'b> {
             if let Ok((id, req)) = channel.receiver.try_recv() {
                 match req {
                     PluginRequest::CreateFrame(options) => {
+                        println!("{:?}", options);
                         if let Ok(frame) = self.comp.mk_frame(options) {
-                            channel.sender.send((id, PluginResponse::Frame(frame.get_messenger()))).unwrap();
+                            channel.response.send((id, PluginResponse::Frame(frame.get_messenger()))).unwrap();
+                        } else {
+                            eprintln!("Failed to create frame");
                         }
                     }
                     _ => todo!()
@@ -172,8 +175,8 @@ pub enum PluginEvent {
 #[derive(Debug, Clone)]
 pub enum PluginRequest {
     CreateFrame(FrameOptions),
-    GetFrameById(u32),
-    CloseFrame(u32),
+    GetFrameById(usize),
+    CloseFrame(usize),
     GetMouse(),
     GetKeys(),
     PaintBuffer(Vec<u32>, Point2D<i32, UnknownUnit>, Size2D<i32, UnknownUnit>),

@@ -225,10 +225,10 @@ impl<'lua> FromLua<'lua> for FrameOptions {
     fn from_lua(lua_value: Value<'lua>, lua: Context<'lua>) -> rlua::Result<Self> {
         match lua_value {
             Value::Table(value) => Ok(Self {
-                min_size: value.get::<_, Table>("min_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
-                max_size: value.get::<_, Table>("max_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
-                size: value.get::<_, Table>("size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap(), v.get::<_, i32>("height").unwrap())).unwrap_or_default(),
-                pos: value.get::<_, Table>("pos").map(|v| Point2D::new(v.get::<_, i32>("x").unwrap(), v.get::<_, i32>("y").unwrap())).unwrap_or_default(),
+                min_size: value.get::<_, Table>("min_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap_or_default(), v.get::<_, i32>("height").unwrap_or_default())).unwrap_or_default(),
+                max_size: value.get::<_, Table>("max_size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap_or(i32::MAX), v.get::<_, i32>("height").unwrap_or(i32::MAX))).unwrap_or(Size2D::new(i32::MAX, i32::MAX)),
+                size: value.get::<_, Table>("size").map(|v| Size2D::new(v.get::<_, i32>("width").unwrap_or_default(), v.get::<_, i32>("height").unwrap_or_default())).unwrap_or_default(),
+                pos: value.get::<_, Table>("pos").map(|v| Point2D::new(v.get::<_, i32>("x").unwrap_or_default(), v.get::<_, i32>("y").unwrap_or_default())).unwrap_or_default(),
                 title: value.get("title").unwrap_or_default(),
                 transparent: value.get("transparent").unwrap_or_default(),
                 can_minimise: value.get("can_minimise").unwrap_or_default(),
