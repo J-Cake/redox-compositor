@@ -1,10 +1,11 @@
-use std::slice;
+use std::{mem, slice};
 use std::time::{Duration, Instant};
 
 use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
 use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, SolidSource, Source};
 use rlua::{Context, FromLua, Table, ToLua, Value};
 use rlua::prelude::LuaTable;
+use syscall::PAGE_SIZE;
 
 use crate::bin::aligned_vec;
 
@@ -35,12 +36,12 @@ pub struct FrameMessenger {
 /// - This can be used to create systems ranging from blurred backgrounds to screen readers.
 impl<'a> Frame<'a> {
     pub fn new(options: FrameOptions, id: usize) -> Result<Frame<'a>, i32> {
-        let mut surface = unsafe {
-            let ptr = aligned_vec(options.size.width as u32, options.size.height as u32).as_mut_ptr() as usize;
-
-            let buffer = slice::from_raw_parts_mut(ptr as *mut u32, (options.size.width * options.size.height) as usize);
-            DrawTarget::from_backing(options.size.width as i32, options.size.height as i32, buffer)
-        };
+        let Size2D { width, height, .. } = options.size;
+        let mut surface = DrawTarget::from_backing(width, height, unsafe {
+            let layout = std::alloc::Layout::from_size_align(mem::size_of::<u32>() * (width * height) as usize, PAGE_SIZE).unwrap();
+            let ptr = std::alloc::alloc(layout) as *mut u32;
+            std::slice::from_raw_parts_mut::<u32>(ptr, (width * height) as usize)
+        });
 
         surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0xaa, 0xaa, 0xaa));
 

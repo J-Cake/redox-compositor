@@ -7,7 +7,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{FromRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use crate::frame::{Frame, FrameEvent, FrameOptions};
 use crate::plugin;
 use crate::plugin::{PluginEvent, PluginManager};
 
-pub struct Compositor<'a, 'b, 'c> {
+pub struct Compositor<'a, 'b> {
     pub displays: Vec<Display<'a>>,
 
     pub frames: HashMap<usize, Frame<'b>>,
@@ -36,14 +36,14 @@ pub struct Compositor<'a, 'b, 'c> {
 
     last_update: Instant,
 
-    on_receive_event: Box<dyn FnMut(PluginEvent) + 'c>,
+    events: Rc<Mutex<VecDeque<PluginEvent>>>
 }
 
 pub const SCHEME_NAME: &'static str = ":comp";
 pub const MAX_FPS: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
-    pub fn new(config: Config, on_receive_event: Box<dyn FnMut(PluginEvent) + 'c>) -> Result<Self, String> {
+impl<'a, 'b> Compositor<'a, 'b> {
+    pub fn new(config: Config) -> Result<(Self, Rc<Mutex<VecDeque<PluginEvent>>>), String> {
         let displays: Vec<Display> = config.displays.iter()
             .map(|(name, pos)| Display::new(&name, &pos)
                 .expect("Failed to create display"))
@@ -59,9 +59,11 @@ impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
             max = ((i.pos.x + i.surface.width()).max(max.0), (i.pos.y + i.surface.height()).max(max.1));
         });
 
-        Ok(Compositor {
+        let events = Rc::new(Mutex::new(VecDeque::new()));
+
+        Ok((Compositor {
             last_update: Instant::now() - MAX_FPS,
-            on_receive_event,
+            events: Rc::clone(&events),
             displays,
             frames: HashMap::new(),
             surface: DrawTarget::new(max.0 - min.0, max.1 - min.1),
@@ -73,7 +75,7 @@ impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
                         .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
                         .unwrap()
                 }),
-        })
+        }, Rc::clone(&events)))
     }
 
     pub fn tick(&mut self) {
@@ -117,7 +119,7 @@ impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
             return Err(syscall::Error { errno: syscall::EINVAL });
         };
 
-        self.on_receive_event.call_mut((PluginEvent::OnFrameCreate(frame.get_messenger()),));
+        self.events.lock().unwrap().push_back(PluginEvent::OnFrameCreate(frame.get_messenger()));
 
         Ok(frame)
     }
@@ -127,8 +129,7 @@ impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
             frame.last_update = Instant::now();
             frame.draw(&mut self.surface);
 
-            self.on_receive_event.call_mut((PluginEvent::OnFrameUpdate(frame.get_messenger()),));
-
+            self.events.lock().unwrap().push_back(PluginEvent::OnFrameUpdate(frame.get_messenger()));
         } else {
             return Err(syscall::Error::new(syscall::ENOENT));
         }
@@ -143,14 +144,14 @@ impl<'a, 'b, 'c> Compositor<'a, 'b, 'c> {
             });
         }
         if let Some(frame) = self.frames.remove(&id) {
-            self.on_receive_event.call_mut((PluginEvent::OnFrameDestroy(frame.get_messenger()),));
+            self.events.lock().unwrap().push_back(PluginEvent::OnFrameDestroy(frame.get_messenger()));
         }
 
         Ok(())
     }
 }
 
-impl<'a, 'b, 'c> SchemeMut for Compositor<'a, 'b, 'c> {
+impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
     fn open(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let options = match FrameOptions::from_string(path) {
             Ok(options) => options,

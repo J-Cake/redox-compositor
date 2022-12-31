@@ -1,4 +1,5 @@
 use std::cell::{Ref, RefCell};
+use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::rc::Rc;
 use std::sync::{mpsc, Mutex};
@@ -11,7 +12,7 @@ use raqote::IntPoint;
 use crate::compositor::{Compositor, MAX_FPS};
 use crate::config::Config;
 use crate::frame::{FrameMessenger, FrameOptions};
-use crate::plugin::plugin::Plugin;
+use crate::plugin::plugin::{MessageID, Plugin};
 
 mod plugin;
 
@@ -52,31 +53,34 @@ mod plugin;
 /// * `Keys {pressed, released}`
 
 struct Channel {
-    pub sender: Sender<PluginResponse>,
-    pub receiver: Receiver<PluginRequest>,
+    pub sender: Sender<(MessageID, PluginResponse)>,
+    pub receiver: Receiver<(MessageID, PluginRequest)>,
 }
 
-pub struct PluginManager<'a, 'b, 'c> {
+pub struct PluginManager<'a, 'b> {
     loaded: Vec<(Plugin, Channel)>,
-    comp: Compositor<'a, 'b, 'c>,
+    comp: Compositor<'a, 'b>,
+    // event_receiver: Receiver<PluginEvent>
+    event_receiver: Rc<Mutex<VecDeque<PluginEvent>>>,
 }
 
-impl<'a, 'b, 'c> PluginManager<'a, 'b, 'c> {
+impl<'a, 'b> PluginManager<'a, 'b> {
     pub fn new(config: Config) -> Result<Self, String> {
+        let (comp, receiver) = Compositor::<'a, 'b>::new(config.clone())
+            .expect("Failed to create Compositor");
+
         let mut mgr = Self {
             loaded: Vec::new(),
-            comp: Compositor::new(config.clone(), Box::new(|event| PluginManager::event(&mut mgr, event)))
-                .expect("Failed to create Compositor"),
+            comp,
+            event_receiver: receiver,
         };
-
-        mgr.comp.tick();
 
         Ok(mgr)
     }
 
     pub fn load(&mut self, path: &str) -> Result<(), String> {
-        let request = mpsc::channel::<PluginRequest>();
-        let response = mpsc::channel::<PluginResponse>();
+        let request = mpsc::channel();
+        let response = mpsc::channel();
 
         let mut plugin = Plugin::new(path, request.0, response.1)?;
         plugin.run().unwrap();
@@ -92,6 +96,10 @@ impl<'a, 'b, 'c> PluginManager<'a, 'b, 'c> {
         loop {
             let now = std::time::Instant::now();
             self.comp.tick();
+            if let Some(e) = self.event_receiver.lock().unwrap().pop_back() {
+                self.event(e);
+            }
+
             self.read_requests();
             let elapsed = now.elapsed();
             if elapsed < MAX_FPS {
@@ -100,7 +108,7 @@ impl<'a, 'b, 'c> PluginManager<'a, 'b, 'c> {
         }
     }
 
-    pub fn event(&mut self, event: PluginEvent) {
+    pub fn event(&self, event: PluginEvent) {
         for (plugin, _) in &self.loaded {
             match event.clone() {
                 PluginEvent::OnFrameCreate(frame) => plugin.on_frame_create(frame),
@@ -116,16 +124,17 @@ impl<'a, 'b, 'c> PluginManager<'a, 'b, 'c> {
                 PluginEvent::OnBeforePluginUnload() => plugin.on_before_plugin_unload()
             }
         }
-
-        self.comp.tick();
     }
 
     pub fn read_requests(&mut self) {
         for (plugin, channel) in self.loaded.iter_mut() {
-            if let Ok(req) = channel.receiver.try_recv() {
-                println!("Received Request: {:?}", req);
+            if let Ok((id, req)) = channel.receiver.try_recv() {
                 match req {
-                    PluginRequest::CreateFrame(options) => {}
+                    PluginRequest::CreateFrame(options) => {
+                        if let Ok(frame) = self.comp.mk_frame(options) {
+                            channel.sender.send((id, PluginResponse::Frame(frame.get_messenger()))).unwrap();
+                        }
+                    }
                     _ => todo!()
                 }
             }
@@ -172,9 +181,9 @@ pub enum PluginRequest {
 
 #[derive(Debug, Clone)]
 pub enum PluginResponse {
-    Frame(usize, FrameMessenger),
-    Mouse(usize, IntPoint, u8, f32),
-    Keys(usize, Vec<u8>, Vec<u8>),
-    Buffer(usize, Vec<u32>),
-    None(usize),
+    Frame(FrameMessenger),
+    Mouse(IntPoint, u8, f32),
+    Keys(Vec<u8>, Vec<u8>),
+    Buffer(Vec<u32>),
+    None(),
 }
