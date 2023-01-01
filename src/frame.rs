@@ -112,6 +112,8 @@ impl<'lua> ToLua<'lua> for FrameMessenger {
         val.set("parent", self.parent).unwrap();
         val.set("last_update", self.last_update.elapsed().as_secs_f64()).unwrap();
 
+        // TODO: Allow Lua to set the buffer, as well as a refresh method.
+
         Ok(Value::Table(val))
     }
 }

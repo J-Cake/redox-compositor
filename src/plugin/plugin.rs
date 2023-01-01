@@ -58,14 +58,15 @@ pub struct Plugin {
 macro_rules! handler {
     ($name:ident$(,$arg:ident: $val:ty)*) => {
         pub fn $name(&self$(, $arg:$val)*) {
-            self.lua.context(|ctx| -> rlua::Result<()> {
+            if let Err(err) = self.lua.context(|ctx| -> rlua::Result<()> {
                 if let Ok(handler) = ctx.named_registry_value::<_, rlua::Function>(stringify!($name)) {
                     handler.call::<_, ()>(($($arg,)*))
                         .unwrap();
                 }
-
                 Ok(())
-            }).unwrap()
+            }) {
+                eprintln!("\nPlugin Error({}): {:?}", stringify!($name), err);
+            }
         }
     };
 }
@@ -98,9 +99,7 @@ impl Plugin {
         self.source.read_to_string(&mut source)
             .expect("Failed to read plugin source");
 
-        let request = self.channel.request.clone();
-
-        self.lua.context(|ctx| -> rlua::Result<()> {
+        if let Err(err) = self.lua.context(|ctx| -> rlua::Result<()> {
             let globals = ctx.globals();
 
             let request = self.channel.request.clone();
@@ -170,7 +169,9 @@ impl Plugin {
             set_handler!(ctx, on_before_plugin_unload);
 
             Ok(())
-        }).unwrap();
+        }) {
+            eprintln!("\nPlugin Error\n: {:?}", err);
+        }
 
         // call the plugin load handler
         self.on_plugin_load();
@@ -180,11 +181,15 @@ impl Plugin {
 
     pub fn receive_responses(&mut self) {
         while let Ok((id, response)) = self.channel.receiver.try_recv() {
-            match response {
+            if let Err(err) = match response {
                 PluginResponse::Frame(req) => self.lua.context(|ctx| if let Ok(handler) = ctx.registry_value::<rlua::Function>(&id) {
-                    handler.call::<_, ()>((req, )).unwrap();
+                    handler.call::<_, ()>((req, ))
+                } else {
+                    Ok(())
                 }),
                 _ => todo!()
+            } {
+                eprintln!("\nPlugin Error\n: {:?}", err);
             }
         }
     }

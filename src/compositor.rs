@@ -11,7 +11,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use euclid::Size2D;
+use euclid::{Box2D, Size2D, UnknownUnit};
 use lazy_static::lazy_static;
 use raqote::{DrawTarget, IntPoint, IntRect, SolidSource};
 use raqote::Source::Solid;
@@ -137,7 +137,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
         Ok(())
     }
 
-    pub fn close(&mut self, id: usize) -> syscall::Result<()> {
+    pub fn close_frame(&mut self, id: usize) -> syscall::Result<()> {
         if !self.frames.contains_key(&id) {
             return Err(syscall::Error {
                 errno: syscall::ENOENT,
@@ -148,6 +148,14 @@ impl<'a, 'b> Compositor<'a, 'b> {
         }
 
         Ok(())
+    }
+
+    pub fn get_frame_by_id(&self, id: usize) -> Option<&Frame> {
+        self.frames.get(&id)
+    }
+
+    pub fn paint_buffer(&mut self, buffer: Vec<u32>, rect: Box2D<i32, UnknownUnit>) {
+        todo!()
     }
 }
 
@@ -195,6 +203,6 @@ impl<'a, 'b> SchemeMut for Compositor<'a, 'b> {
     }
 
     fn close(&mut self, id: usize) -> syscall::Result<usize> {
-        self.close(id).map(|i| 0)
+        self.close_frame(id).map(|i| 0)
     }
 }

@@ -6,7 +6,7 @@ use std::sync::{mpsc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
-use euclid::{Point2D, Size2D, UnknownUnit};
+use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
 use raqote::IntPoint;
 
 use crate::compositor::{Compositor, MAX_FPS};
@@ -137,7 +137,28 @@ impl<'a, 'b> PluginManager<'a, 'b> {
                         } else {
                             eprintln!("Failed to create frame");
                         }
-                    }
+                    },
+                    PluginRequest::CloseFrame(id) => {
+                        self.comp.close_frame(id).unwrap()
+                    },
+                    PluginRequest::GetFrameById(frame_id) => {
+                        if let Some(frame) = self.comp.get_frame_by_id(frame_id) {
+                            channel.response.send((id, PluginResponse::Frame(frame.get_messenger()))).unwrap();
+                        } else {
+                            eprintln!("Failed to get frame by id");
+                        }
+                    },
+                    // PluginRequest::GetMouse() => {
+                    //     let mouse = self.comp.get_mouse();
+                    //     channel.response.send((id, PluginResponse::Mouse(mouse))).unwrap();
+                    // },
+                    // PluginRequest::GetKeys() => {
+                    //     let keys = self.comp.get_keys();
+                    //     channel.response.send((id, PluginResponse::Keys(keys))).unwrap();
+                    // },
+                    PluginRequest::PaintBuffer(buffer, pos, size) => {
+                        self.comp.paint_buffer(buffer, Box2D::from_origin_and_size(pos, size));
+                    },
                     _ => todo!()
                 }
             }
@@ -185,8 +206,8 @@ pub enum PluginRequest {
 #[derive(Debug, Clone)]
 pub enum PluginResponse {
     Frame(FrameMessenger),
-    Mouse(IntPoint, u8, f32),
-    Keys(Vec<u8>, Vec<u8>),
+    // Mouse(IntPoint, u8, (f32, f32)),
+    // Keys(Vec<u8>, Vec<u8>),
     Buffer(Vec<u32>),
     None(),
 }
