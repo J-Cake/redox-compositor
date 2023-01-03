@@ -1,37 +1,76 @@
-use std::{mem, thread};
-use std::fs::OpenOptions;
-use std::os::fd::AsRawFd;
+use std::thread;
 use std::time::Duration;
 
-use raqote::Color;
-use syscall::PAGE_SIZE;
+use euclid::Point2D;
+use raqote::{Color, DrawOptions, Gradient, GradientStop, LineCap, LineJoin, PathBuilder, SolidSource, Source, Spread, StrokeStyle};
+
+mod frame;
 
 fn main() {
-    let win = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("comp:title=Client&min-size=200,160")
-        .expect("Unable to create window");
+    let mut frame = frame::Frame::new("Hi", 400, 400).unwrap();
 
-    let mut ctx = unsafe {
-        let ptr = syscall::fmap(win.as_raw_fd() as usize, &syscall::Map {
-            offset: 0,
-            size: ((200 * 160 * 4) as usize + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1),
-            flags: syscall::PROT_READ | syscall::PROT_WRITE,
-            address: 0,
-        }).unwrap();
+    frame.on_render(|surface| -> () {
+        surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0xff, 0xff, 0xff));
 
-        let buffer = std::slice::from_raw_parts_mut(ptr as *mut u32, 200 * 160);
-        raqote::DrawTarget::from_backing(200, 160, buffer)
-    };
+        let mut pb = PathBuilder::new();
+        pb.move_to(100., 10.);
+        pb.cubic_to(150., 40., 175., 0., 200., 10.);
+        pb.quad_to(120., 100., 80., 200.);
+        pb.quad_to(150., 180., 300., 300.);
+        pb.close();
+        let path = pb.finish();
 
-    ctx.clear(raqote::SolidSource { r: 0xff, g: 0xff, b: 0xff, a: 0xff });
+        let gradient = Source::new_radial_gradient(
+            Gradient {
+                stops: vec![
+                    GradientStop {
+                        position: 0.2,
+                        color: Color::new(0xff, 0, 0xff, 0),
+                    },
+                    GradientStop {
+                        position: 0.8,
+                        color: Color::new(0xff, 0xff, 0xff, 0xff),
+                    },
+                    GradientStop {
+                        position: 1.,
+                        color: Color::new(0xff, 0xff, 0, 0xff),
+                    },
+                ],
+            },
+            Point2D::new(150., 150.),
+            128.,
+            Spread::Pad,
+        );
+        surface.fill(&path, &gradient, &DrawOptions::new());
 
-    syscall::fsync(win.as_raw_fd() as usize).unwrap();
+        let mut pb = PathBuilder::new();
+        pb.move_to(100., 100.);
+        pb.line_to(300., 300.);
+        pb.line_to(200., 300.);
+        let path = pb.finish();
+
+        surface.stroke(
+            &path,
+            &Source::Solid(SolidSource {
+                r: 0x0,
+                g: 0x0,
+                b: 0x80,
+                a: 0x80,
+            }),
+            &StrokeStyle {
+                cap: LineCap::Round,
+                join: LineJoin::Round,
+                width: 10.,
+                miter_limit: 2.,
+                dash_array: vec![10., 18.],
+                dash_offset: 16.,
+            },
+            &DrawOptions::new(),
+        );
+    });
 
     loop {
-        ctx.clear(raqote::SolidSource::from_unpremultiplied_argb(0xff, 0xff, 0x00, 0xff));
-        syscall::fsync(win.as_raw_fd() as usize).unwrap();
-        thread::sleep(Duration::from_millis(16000));
+        thread::sleep(Duration::from_millis(100));
+        frame.update();
     }
 }
