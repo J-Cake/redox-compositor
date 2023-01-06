@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
@@ -6,37 +6,35 @@ use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{FromRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::{Arc, Condvar, Mutex};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::{Arc, Condvar, mpsc, Mutex};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use euclid::{Box2D, Size2D, UnknownUnit};
+use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
 use lazy_static::lazy_static;
-use raqote::{DrawTarget, IntPoint, IntRect, SolidSource};
+use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, SolidSource};
 use raqote::Source::Solid;
-use syscall::{Map, O_NONBLOCK, Packet, SchemeMut};
+use syscall::{Event, Map, O_NONBLOCK, Packet, SchemeMut};
 
 use crate::config::Config;
-use crate::display::Display;
+use crate::cursor::Cursor;
+use crate::display::{Display, InputEvent, SyncRect};
 use crate::frame::{Frame, FrameEvent, FrameOptions};
 use crate::plugin;
 use crate::plugin::{PluginEvent, PluginManager};
 
-pub struct Compositor<'a, 'b> {
+pub struct Compositor<'a, 'b> where 'b: 'a {
     pub displays: Vec<Display<'a>>,
-
     pub frames: HashMap<usize, Frame<'b>>,
-
     pub surface: DrawTarget,
-
-    pub cursor: IntPoint,
-
+    pub cursor: Cursor,
     pub scheme: File,
 
     last_update: Instant,
-
-    events: Rc<Mutex<VecDeque<PluginEvent>>>
+    events: Rc<Mutex<VecDeque<PluginEvent>>>,
+    input: Receiver<InputEvent>,
+    data_beneath_cursor: (i32, i32, Vec<u32>)
 }
 
 pub const SCHEME_NAME: &'static str = ":comp";
@@ -44,8 +42,9 @@ pub const MAX_FPS: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 impl<'a, 'b> Compositor<'a, 'b> {
     pub fn new(config: Config) -> Result<(Self, Rc<Mutex<VecDeque<PluginEvent>>>), String> {
+        let (sender, receiver) = channel();
         let displays: Vec<Display> = config.displays.iter()
-            .map(|(name, pos)| Display::new(&name, &pos)
+            .map(|(name, pos)| Display::new(&name, &pos, sender.clone())
                 .expect("Failed to create display"))
             .collect();
 
@@ -64,10 +63,12 @@ impl<'a, 'b> Compositor<'a, 'b> {
         Ok((Compositor {
             last_update: Instant::now() - MAX_FPS,
             events: Rc::clone(&events),
+            input: receiver,
             displays,
+            data_beneath_cursor: (0, 0, Vec::new()),
             frames: HashMap::new(),
             surface: DrawTarget::new(max.0 - min.0, max.1 - min.1),
-            cursor: IntPoint::new(0, 0),
+            cursor: Cursor::new(min.0, max.0, min.1, max.1),
             scheme: syscall::open(SCHEME_NAME, syscall::O_CREAT | syscall::O_RDWR | syscall::O_CLOEXEC | O_NONBLOCK)
                 .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
                 .unwrap_or_else(|_| {
@@ -91,6 +92,13 @@ impl<'a, 'b> Compositor<'a, 'b> {
             }
         }
 
+        while let Ok(event) = self.input.try_recv() {
+            match event.code {
+                11 => self.move_cursor_and_repaint(event),
+                _ => ()
+            }
+        }
+
         self.draw();
         self.last_update = Instant::now();
     }
@@ -99,7 +107,50 @@ impl<'a, 'b> Compositor<'a, 'b> {
         self.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
 
         self.frames.values_mut().for_each(|i| i.draw(&mut self.surface));
+
+        self.paint_cursor_on_primary_surface();
+
         self.displays.iter_mut().for_each(|i| i.draw(&mut self.surface));
+        self.displays.iter_mut().for_each(|i| i.sync(None));
+    }
+
+    fn paint_cursor_on_primary_surface(&mut self) {
+        let cursor_img = self.cursor.image();
+        let cursor_pos = self.cursor.get_pos().to_f32();
+
+        // Draw the cursor
+        self.surface.draw_image_at(cursor_pos.x, cursor_pos.y, &cursor_img, &DrawOptions::new());
+    }
+
+    fn move_cursor_and_repaint(&mut self, event: InputEvent) {
+        self.cursor.move_cursor(event.a as i32, event.b as i32);
+        let bound = self.cursor.get_bounding_region();
+        if let Some(display) = self.displays.iter_mut().find(|i| i.get_bounds().contains(bound.min)) {
+            let img = self.cursor.image();
+            let new_pos = (self.cursor.get_pos() - display.pos).to_point();
+
+            // Restore contents beneath cursor
+            display.surface.copy_surface(&self.surface, bound, new_pos);
+
+            display.surface.draw_image_at(new_pos.x as f32, new_pos.y as f32, &img, &DrawOptions::default());
+            display.sync(Some(SyncRect {
+                x: new_pos.x,
+                y: new_pos.y,
+                w: img.width,
+                h: img.height,
+            }));
+        }
+    }
+
+    pub fn to_local_mut(&mut self, pos: Point2D<i32, UnknownUnit>) -> Option<(&'a mut Display, Box2D<i32, UnknownUnit>, Point2D<i32, UnknownUnit>)> {
+        if let Some(display) = self.displays.iter_mut().find(|i| i.get_bounds().contains(pos)) {
+            let bounds = display.get_bounds();
+            let pos = Point2D::new(pos.x - bounds.min.x, pos.y - bounds.min.y);
+
+            Some((display, bounds, pos))
+        } else {
+            None
+        }
     }
 
     pub fn get_layout(&self) -> Vec<IntRect> {

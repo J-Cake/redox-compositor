@@ -1,15 +1,16 @@
 use std::{mem, slice};
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::mpsc::Sender;
 
-use euclid::{Size2D, UnknownUnit};
+use euclid::{Box2D, Size2D, UnknownUnit};
 use raqote::{DrawTarget, IntPoint, IntRect, PathBuilder, SolidSource};
 
 pub struct Display<'a> {
     pub surface: DrawTarget<&'a mut [u32]>,
-    // surface: Vec<u32>,
+    sender: Sender<InputEvent>,
     backing: File,
 
     // pub size: Size2D<i32, UnknownUnit>,
@@ -18,15 +19,51 @@ pub struct Display<'a> {
 
 #[derive(Clone, Copy)]
 #[repr(packed)]
-struct SyncRect {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+pub(crate) struct SyncRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) w: i32,
+    pub(crate) h: i32,
+}
+impl From<Box2D<i32, UnknownUnit>> for SyncRect {
+    fn from(value: Box2D<i32, UnknownUnit>) -> Self {
+        Self {
+            x: value.min.x,
+            y: value.min.y,
+            w: value.max.x - value.min.x,
+            h: value.max.y - value.min.y
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(packed)]
+pub struct InputEvent {
+    pub code: i64,
+    pub a: i64,
+    pub b: i64,
+}
+
+impl InputEvent {
+    /// Create a null event
+    pub fn new() -> InputEvent {
+        InputEvent {
+            code: 0,
+            a: 0,
+            b: 0,
+        }
+    }
+}
+
+unsafe fn read_to_slice<R: Read, T: Copy>(mut r: R, buf: &mut [T]) -> std::io::Result<usize> {
+    r.read(slice::from_raw_parts_mut(
+        buf.as_mut_ptr() as *mut u8,
+        buf.len() * mem::size_of::<T>())
+    ).map(|count| count / mem::size_of::<T>())
 }
 
 impl<'a> Display<'a> {
-    pub fn new(display: &str, pos: &IntPoint) -> Result<Display<'a>, String> {
+    pub fn new(display: &str, pos: &IntPoint, sender: Sender<InputEvent>) -> Result<Display<'a>, String> {
         let mut backing = match OpenOptions::new()
             .read(true)
             .write(true)
@@ -73,22 +110,36 @@ impl<'a> Display<'a> {
 
         let mut display = Self {
             pos: pos.clone(),
+            sender,
             backing,
             surface,
         };
-        display.sync();
+        display.sync(None);
         Ok(display)
     }
 
-    fn sync(&mut self) {
+    pub fn get_bounds(&self) -> Box2D<i32, UnknownUnit> {
+        Box2D::new(
+            self.pos,
+            self.pos + Size2D::new(self.surface.width(), self.surface.height())
+        )
+    }
+
+    pub(crate) fn sync(&mut self, rect: Option<SyncRect>) {
+        if let Ok(event) = self.fetch_event() {
+            for event in event {
+                self.sender.send(event).unwrap();
+            }
+        }
+
         self.backing.write(unsafe {
             slice::from_raw_parts(
-                &(SyncRect {
+                &(rect.unwrap_or(SyncRect {
                     x: 0,
                     y: 0,
                     w: self.surface.width(),
                     h: self.surface.height(),
-                }) as *const SyncRect as *const u8,
+                })) as *const SyncRect as *const u8,
                 mem::size_of::<SyncRect>())
         }).unwrap();
         syscall::fsync(self.backing.as_raw_fd() as usize).unwrap();
@@ -97,7 +148,12 @@ impl<'a> Display<'a> {
     pub fn draw(&mut self, surface: &mut DrawTarget) {
         let size = Size2D::new(self.surface.width(), self.surface.height());
         self.surface.copy_surface(surface, IntRect::from_origin_and_size(self.pos, size), IntPoint::new(0, 0));
+    }
 
-        self.sync();
+    pub fn fetch_event(&mut self) -> std::io::Result<Vec<InputEvent>> {
+        let mut buf: [InputEvent; 64] = [InputEvent::new(); 64];
+        let count = unsafe { read_to_slice(&mut self.backing, &mut buf)? };
+
+        Ok(Vec::from(&buf[..count]))
     }
 }

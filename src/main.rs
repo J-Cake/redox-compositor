@@ -15,6 +15,8 @@ mod frame;
 mod config;
 mod bin;
 mod plugin;
+mod cursor;
+mod buffer;
 
 fn main() {
     redox_daemon::Daemon::new(move |daemon| {

@@ -70,7 +70,7 @@ fn main() {
     });
 
     loop {
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(10_000));
         frame.update();
     }
 }
