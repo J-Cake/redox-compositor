@@ -11,9 +11,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
+use euclid::{Box2D, Point2D, SideOffsets2D, Size2D, UnknownUnit};
 use lazy_static::lazy_static;
-use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, SolidSource};
+use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, SolidSource, Source};
 use raqote::Source::Solid;
 use syscall::{Event, Map, O_NONBLOCK, Packet, SchemeMut};
 
@@ -34,7 +34,6 @@ pub struct Compositor<'a, 'b> where 'b: 'a {
     last_update: Instant,
     events: Rc<Mutex<VecDeque<PluginEvent>>>,
     input: Receiver<InputEvent>,
-    data_beneath_cursor: (i32, i32, Vec<u32>)
 }
 
 pub const SCHEME_NAME: &'static str = ":comp";
@@ -43,7 +42,7 @@ pub const MAX_FPS: Duration = Duration::from_nanos(1_000_000_000 / 60);
 impl<'a, 'b> Compositor<'a, 'b> {
     pub fn new(config: Config) -> Result<(Self, Rc<Mutex<VecDeque<PluginEvent>>>), String> {
         let (sender, receiver) = channel();
-        let displays: Vec<Display> = config.displays.iter()
+        let mut displays: Vec<Display> = config.displays.iter()
             .map(|(name, pos)| Display::new(&name, &pos, sender.clone())
                 .expect("Failed to create display"))
             .collect();
@@ -60,14 +59,19 @@ impl<'a, 'b> Compositor<'a, 'b> {
 
         let events = Rc::new(Mutex::new(VecDeque::new()));
 
+        let mut surface = DrawTarget::new(max.0 - min.0, max.1 - min.1);
+        surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
+
+        displays.iter_mut().for_each(|i| i.draw(&mut surface));
+        displays.iter_mut().for_each(|i| i.sync(None));
+
         Ok((Compositor {
             last_update: Instant::now() - MAX_FPS,
             events: Rc::clone(&events),
             input: receiver,
             displays,
-            data_beneath_cursor: (0, 0, Vec::new()),
             frames: HashMap::new(),
-            surface: DrawTarget::new(max.0 - min.0, max.1 - min.1),
+            surface,//: DrawTarget::new(max.0 - min.0, max.1 - min.1),
             cursor: Cursor::new(min.0, max.0, min.1, max.1),
             scheme: syscall::open(SCHEME_NAME, syscall::O_CREAT | syscall::O_RDWR | syscall::O_CLOEXEC | O_NONBLOCK)
                 .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
@@ -94,53 +98,31 @@ impl<'a, 'b> Compositor<'a, 'b> {
 
         while let Ok(event) = self.input.try_recv() {
             match event.code {
-                11 => self.move_cursor_and_repaint(event),
+                11 => {
+                    let (a, b) = (event.a, event.b);
+
+                    self.cursor.move_cursor(a as i32, b as i32);
+                    self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+                }
                 _ => ()
             }
         }
 
-        self.draw();
+        self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+
+        self.displays.iter_mut().for_each(|i| i.sync(None));
         self.last_update = Instant::now();
     }
 
-    pub fn draw(&mut self) {
-        self.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
-
-        self.frames.values_mut().for_each(|i| i.draw(&mut self.surface));
-
-        self.paint_cursor_on_primary_surface();
-
-        self.displays.iter_mut().for_each(|i| i.draw(&mut self.surface));
-        self.displays.iter_mut().for_each(|i| i.sync(None));
-    }
-
-    fn paint_cursor_on_primary_surface(&mut self) {
-        let cursor_img = self.cursor.image();
-        let cursor_pos = self.cursor.get_pos().to_f32();
-
-        // Draw the cursor
-        self.surface.draw_image_at(cursor_pos.x, cursor_pos.y, &cursor_img, &DrawOptions::new());
-    }
-
-    fn move_cursor_and_repaint(&mut self, event: InputEvent) {
-        self.cursor.move_cursor(event.a as i32, event.b as i32);
-        let bound = self.cursor.get_bounding_region();
-        if let Some(display) = self.displays.iter_mut().find(|i| i.get_bounds().contains(bound.min)) {
-            let img = self.cursor.image();
-            let new_pos = (self.cursor.get_pos() - display.pos).to_point();
-
-            // Restore contents beneath cursor
-            display.surface.copy_surface(&self.surface, bound, new_pos);
-
-            display.surface.draw_image_at(new_pos.x as f32, new_pos.y as f32, &img, &DrawOptions::default());
-            display.sync(Some(SyncRect {
-                x: new_pos.x,
-                y: new_pos.y,
-                w: img.width,
-                h: img.height,
-            }));
-        }
-    }
+    // pub fn draw(&mut self) {
+    //     self.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
+    //
+    //     self.frames.values_mut().for_each(|i| i.draw(&mut self.surface));
+    //
+    //     self.displays.iter_mut().for_each(|i| i.draw(&mut self.surface));
+    //     self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+    //     self.displays.iter_mut().for_each(|i| i.sync(None));
+    // }
 
     pub fn to_local_mut(&mut self, pos: Point2D<i32, UnknownUnit>) -> Option<(&'a mut Display, Box2D<i32, UnknownUnit>, Point2D<i32, UnknownUnit>)> {
         if let Some(display) = self.displays.iter_mut().find(|i| i.get_bounds().contains(pos)) {
@@ -175,6 +157,27 @@ impl<'a, 'b> Compositor<'a, 'b> {
         Ok(frame)
     }
 
+    fn sync_frame(&mut self, frame: usize) {
+        dbg!("Syncing Frame {}", frame);
+
+        if let Some(frame) = self.frames.get(&frame) {
+            for i in &mut self.displays {
+                if i.get_bounds().contains(frame.pos) {
+                    let pos = frame.pos - i.pos.to_vector();
+
+                    i.sync(Some(SyncRect {
+                        x: pos.x,
+                        y: pos.y,
+                        w: frame.surface.width(),
+                        h: frame.surface.height(),
+                    }));
+                }
+            }
+        }
+
+        self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+    }
+
     fn update_frame(&mut self, id: usize) -> syscall::Result<()> {
         if let Some(frame) = self.frames.get_mut(&id) {
             frame.last_update = Instant::now();
@@ -183,6 +186,11 @@ impl<'a, 'b> Compositor<'a, 'b> {
             self.events.lock().unwrap().push_back(PluginEvent::OnFrameUpdate(frame.get_messenger()));
         } else {
             return Err(syscall::Error::new(syscall::ENOENT));
+        }
+
+        if self.frames.contains_key(&id) {
+            self.displays.iter_mut().for_each(|i| i.draw(&mut self.surface));
+            self.sync_frame(id.clone());
         }
 
         Ok(())

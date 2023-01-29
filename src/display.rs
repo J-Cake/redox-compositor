@@ -1,20 +1,28 @@
+// use core::error::Source;
 use std::{mem, slice};
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 
-use euclid::{Box2D, Size2D, UnknownUnit};
-use raqote::{DrawTarget, IntPoint, IntRect, PathBuilder, SolidSource};
+use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
+use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, PathBuilder, Point, SolidSource, Source};
+
+use crate::cursor::Cursor;
+
+const TAIL_LENGTH: usize = 4;
 
 pub struct Display<'a> {
     pub surface: DrawTarget<&'a mut [u32]>,
     sender: Sender<InputEvent>,
     backing: File,
 
-    // pub size: Size2D<i32, UnknownUnit>,
     pub pos: IntPoint,
+
+    prev_cursor: VecDeque<Option<(SyncRect, Vec<u32>)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -25,13 +33,14 @@ pub(crate) struct SyncRect {
     pub(crate) w: i32,
     pub(crate) h: i32,
 }
+
 impl From<Box2D<i32, UnknownUnit>> for SyncRect {
     fn from(value: Box2D<i32, UnknownUnit>) -> Self {
         Self {
             x: value.min.x,
             y: value.min.y,
             w: value.max.x - value.min.x,
-            h: value.max.y - value.min.y
+            h: value.max.y - value.min.y,
         }
     }
 }
@@ -113,7 +122,10 @@ impl<'a> Display<'a> {
             sender,
             backing,
             surface,
+
+            prev_cursor: VecDeque::new(),
         };
+
         display.sync(None);
         Ok(display)
     }
@@ -121,8 +133,57 @@ impl<'a> Display<'a> {
     pub fn get_bounds(&self) -> Box2D<i32, UnknownUnit> {
         Box2D::new(
             self.pos,
-            self.pos + Size2D::new(self.surface.width(), self.surface.height())
+            self.pos + Size2D::new(self.surface.width(), self.surface.height()),
         )
+    }
+
+    pub(crate) fn draw_cursor(&mut self, cursor: &Cursor) {
+        for cursor in 0..self.prev_cursor.len() {
+            if let Some((rect, data)) = self.prev_cursor.get(cursor).unwrap() {
+                self.surface.draw_image_at(rect.x as f32, rect.y as f32, &raqote::Image {
+                    width: rect.w as i32,
+                    height: rect.h as i32,
+                    data: &data,
+                    // data: &vec![0xff000000u32; rect.w as usize * rect.h as usize],
+                }, &raqote::DrawOptions::default());
+            }
+        }
+
+        while self.prev_cursor.len() > TAIL_LENGTH {
+            self.prev_cursor.pop_front();
+        }
+
+        let img = cursor.image();
+
+        let pos = (cursor.get_pos() - self.pos.to_vector()).to_f32();
+
+        let mut data = DrawTarget::new(img.width, img.height);
+        data.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
+
+        data.draw_image_at(-pos.x, -pos.y, &raqote::Image {
+            width: self.surface.width(),
+            height: self.surface.height(),
+            data: self.surface.get_data(),
+        }, &DrawOptions::default());
+
+        self.prev_cursor.push_back(Some((SyncRect {
+            x: pos.x as i32,
+            y: pos.y as i32,
+            w: img.width,
+            h: img.height
+        }, data.into_vec())));
+
+        self.surface.draw_image_at(pos.x, pos.y, &img, &raqote::DrawOptions::new());
+        self.sync(Some(IntRect::from_origin_and_size(
+            pos.to_i32(),
+            Size2D::new(img.width as i32, img.height as i32),
+        ).into()));
+
+        for a in 0..self.prev_cursor.len() {
+            if let Some((rect, _)) = self.prev_cursor.get(a).unwrap() {
+                self.sync(Some(rect.clone()));
+            }
+        }
     }
 
     pub(crate) fn sync(&mut self, rect: Option<SyncRect>) {

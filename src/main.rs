@@ -2,6 +2,8 @@
 #![feature(fn_traits)]
 #![allow(warnings)]
 
+extern crate core;
+
 use std::borrow::BorrowMut;
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
@@ -21,6 +23,8 @@ mod buffer;
 fn main() {
     redox_daemon::Daemon::new(move |daemon| {
         daemon.ready().expect("erika: failed to notify parent");
+
+        println!("Hi World!");
 
         let config = config::load()
             .expect("Failed to fetch config");

@@ -5,6 +5,7 @@ use raqote::{Color, DrawOptions, DrawTarget, Gradient, GradientStop, Image, Line
 
 pub struct Cursor {
     pos: Point2D<i32, UnknownUnit>,
+    prev_pos: Point2D<i32, UnknownUnit>,
     cursor_size: i32,
     bounds: Box2D<i32, UnknownUnit>,
     data: Vec<u32>,
@@ -17,6 +18,7 @@ impl Cursor {
 
         Self {
             pos: Point2D::new((max_x - min_x) / 2, (max_y - min_y) / 2),
+            prev_pos: Point2D::new((max_x - min_x) / 2, (max_y - min_y) / 2),
             cursor_size,
             bounds: Box2D::new(Point2D::new(min_x, min_y), Point2D::new(max_x, max_y)),
             data: surface.into_vec(),
@@ -32,11 +34,15 @@ impl Cursor {
     }
 
     pub fn set_pos(&mut self, pos: Point2D<i32, UnknownUnit>) {
+        self.prev_pos = self.pos.clone();
         self.pos = pos;
     }
 
     pub fn get_pos(&self) -> Point2D<i32, UnknownUnit> {
         self.pos
+    }
+    pub fn get_prev_pos(&self) -> Point2D<i32, UnknownUnit> {
+        self.prev_pos
     }
 
     pub fn get_size(&self) -> Size2D<i32, UnknownUnit> {
@@ -51,8 +57,6 @@ impl Cursor {
         self.pos = self.pos.add(Size2D::new(x, y))
             .clamp(self.bounds.min, self.bounds.max);
     }
-
-    pub fn draw(&self, surface: &mut DrawTarget) {}
 }
 
 /// Generate the cursor graphic. Very much inspired by KDE Plasma's Breeze cursors.
