@@ -84,10 +84,6 @@ impl<'a, 'b> Compositor<'a, 'b> {
     }
 
     pub fn tick(&mut self) {
-        if self.last_update.elapsed() < MAX_FPS {
-            return;
-        }
-
         let mut packet = Packet::default();
         if let Ok(len) = self.scheme.read(&mut packet) {
             if len > 0 {
@@ -108,21 +104,8 @@ impl<'a, 'b> Compositor<'a, 'b> {
             }
         }
 
-        self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
-
-        self.displays.iter_mut().for_each(|i| i.sync(None));
         self.last_update = Instant::now();
     }
-
-    // pub fn draw(&mut self) {
-    //     self.surface.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
-    //
-    //     self.frames.values_mut().for_each(|i| i.draw(&mut self.surface));
-    //
-    //     self.displays.iter_mut().for_each(|i| i.draw(&mut self.surface));
-    //     self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
-    //     self.displays.iter_mut().for_each(|i| i.sync(None));
-    // }
 
     pub fn to_local_mut(&mut self, pos: Point2D<i32, UnknownUnit>) -> Option<(&'a mut Display, Box2D<i32, UnknownUnit>, Point2D<i32, UnknownUnit>)> {
         if let Some(display) = self.displays.iter_mut().find(|i| i.get_bounds().contains(pos)) {
@@ -158,7 +141,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
     }
 
     fn sync_frame(&mut self, frame: usize) {
-        dbg!("Syncing Frame {}", frame);
+        // dbg!("Syncing Frame {}", frame);
 
         if let Some(frame) = self.frames.get(&frame) {
             for i in &mut self.displays {

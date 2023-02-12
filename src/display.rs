@@ -13,7 +13,7 @@ use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, PathBuilder, Point, Sol
 
 use crate::cursor::Cursor;
 
-const TAIL_LENGTH: usize = 4;
+const TAIL_LENGTH: usize = 1;
 
 pub struct Display<'a> {
     pub surface: DrawTarget<&'a mut [u32]>,
@@ -145,7 +145,7 @@ impl<'a> Display<'a> {
                     height: rect.h as i32,
                     data: &data,
                     // data: &vec![0xff000000u32; rect.w as usize * rect.h as usize],
-                }, &raqote::DrawOptions::default());
+                }, &DrawOptions::default());
             }
         }
 
@@ -173,7 +173,7 @@ impl<'a> Display<'a> {
             h: img.height
         }, data.into_vec())));
 
-        self.surface.draw_image_at(pos.x, pos.y, &img, &raqote::DrawOptions::new());
+        self.surface.draw_image_at(pos.x, pos.y, &img, &DrawOptions::new());
         self.sync(Some(IntRect::from_origin_and_size(
             pos.to_i32(),
             Size2D::new(img.width as i32, img.height as i32),
