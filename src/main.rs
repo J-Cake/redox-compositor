@@ -17,7 +17,7 @@ mod frame;
 mod config;
 mod bin;
 mod plugin;
-mod cursor;
+// mod cursor;
 mod buffer;
 
 fn main() {

@@ -11,7 +11,7 @@ use raqote::IntPoint;
 
 use crate::compositor::{Compositor, MAX_FPS};
 use crate::config::Config;
-use crate::cursor::Cursor;
+// use crate::cursor::Cursor;
 use crate::frame::{FrameMessenger, FrameOptions};
 use crate::plugin::plugin::{MessageID, Plugin};
 

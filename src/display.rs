@@ -11,9 +11,9 @@ use std::sync::mpsc::Sender;
 use euclid::{Box2D, Point2D, Size2D, UnknownUnit};
 use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, PathBuilder, Point, SolidSource, Source};
 
-use crate::cursor::Cursor;
+// use crate::cursor::Cursor;
 
-const TAIL_LENGTH: usize = 4;
+// const TAIL_LENGTH: usize = 4;
 
 pub struct Display<'a> {
     pub surface: DrawTarget<&'a mut [u32]>,
@@ -22,7 +22,7 @@ pub struct Display<'a> {
 
     pub pos: IntPoint,
 
-    prev_cursor: VecDeque<Option<(SyncRect, Vec<u32>)>>,
+    // prev_cursor: VecDeque<Option<(SyncRect, Vec<u32>)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -123,7 +123,7 @@ impl<'a> Display<'a> {
             backing,
             surface,
 
-            prev_cursor: VecDeque::new(),
+            // prev_cursor: VecDeque::new(),
         };
 
         display.sync(None);
@@ -137,54 +137,54 @@ impl<'a> Display<'a> {
         )
     }
 
-    pub(crate) fn draw_cursor(&mut self, cursor: &Cursor) {
-        for cursor in 0..self.prev_cursor.len() {
-            if let Some((rect, data)) = self.prev_cursor.get(cursor).unwrap() {
-                self.surface.draw_image_at(rect.x as f32, rect.y as f32, &raqote::Image {
-                    width: rect.w as i32,
-                    height: rect.h as i32,
-                    data: &data,
-                    // data: &vec![0xff000000u32; rect.w as usize * rect.h as usize],
-                }, &raqote::DrawOptions::default());
-            }
-        }
-
-        while self.prev_cursor.len() > TAIL_LENGTH {
-            self.prev_cursor.pop_front();
-        }
-
-        let img = cursor.image();
-
-        let pos = (cursor.get_pos() - self.pos.to_vector()).to_f32();
-
-        let mut data = DrawTarget::new(img.width, img.height);
-        data.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
-
-        data.draw_image_at(-pos.x, -pos.y, &raqote::Image {
-            width: self.surface.width(),
-            height: self.surface.height(),
-            data: self.surface.get_data(),
-        }, &DrawOptions::default());
-
-        self.prev_cursor.push_back(Some((SyncRect {
-            x: pos.x as i32,
-            y: pos.y as i32,
-            w: img.width,
-            h: img.height
-        }, data.into_vec())));
-
-        self.surface.draw_image_at(pos.x, pos.y, &img, &raqote::DrawOptions::new());
-        self.sync(Some(IntRect::from_origin_and_size(
-            pos.to_i32(),
-            Size2D::new(img.width as i32, img.height as i32),
-        ).into()));
-
-        for a in 0..self.prev_cursor.len() {
-            if let Some((rect, _)) = self.prev_cursor.get(a).unwrap() {
-                self.sync(Some(rect.clone()));
-            }
-        }
-    }
+    // pub(crate) fn draw_cursor(&mut self, cursor: &Cursor) {
+    //     for cursor in 0..self.prev_cursor.len() {
+    //         if let Some((rect, data)) = self.prev_cursor.get(cursor).unwrap() {
+    //             self.surface.draw_image_at(rect.x as f32, rect.y as f32, &raqote::Image {
+    //                 width: rect.w as i32,
+    //                 height: rect.h as i32,
+    //                 data: &data,
+    //                 // data: &vec![0xff000000u32; rect.w as usize * rect.h as usize],
+    //             }, &raqote::DrawOptions::default());
+    //         }
+    //     }
+    //
+    //     while self.prev_cursor.len() > TAIL_LENGTH {
+    //         self.prev_cursor.pop_front();
+    //     }
+    //
+    //     let img = cursor.image();
+    //
+    //     let pos = (cursor.get_pos() - self.pos.to_vector()).to_f32();
+    //
+    //     let mut data = DrawTarget::new(img.width, img.height);
+    //     data.clear(SolidSource::from_unpremultiplied_argb(0xff, 0, 0, 0));
+    //
+    //     data.draw_image_at(-pos.x, -pos.y, &raqote::Image {
+    //         width: self.surface.width(),
+    //         height: self.surface.height(),
+    //         data: self.surface.get_data(),
+    //     }, &DrawOptions::default());
+    //
+    //     self.prev_cursor.push_back(Some((SyncRect {
+    //         x: pos.x as i32,
+    //         y: pos.y as i32,
+    //         w: img.width,
+    //         h: img.height
+    //     }, data.into_vec())));
+    //
+    //     self.surface.draw_image_at(pos.x, pos.y, &img, &raqote::DrawOptions::new());
+    //     self.sync(Some(IntRect::from_origin_and_size(
+    //         pos.to_i32(),
+    //         Size2D::new(img.width as i32, img.height as i32),
+    //     ).into()));
+    //
+    //     for a in 0..self.prev_cursor.len() {
+    //         if let Some((rect, _)) = self.prev_cursor.get(a).unwrap() {
+    //             self.sync(Some(rect.clone()));
+    //         }
+    //     }
+    // }
 
     pub(crate) fn sync(&mut self, rect: Option<SyncRect>) {
         if let Ok(event) = self.fetch_event() {

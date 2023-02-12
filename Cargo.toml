@@ -17,3 +17,7 @@ rlua = "0.19.4"
 [[bin]]
 name = "comp"
 path = "src/main.rs"
+
+[[bin]]
+name = "cursor"
+path = "cursor/main.rs"

@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use euclid::{Box2D, Point2D, SideOffsets2D, Size2D, UnknownUnit};
 use lazy_static::lazy_static;
-use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, SolidSource, Source};
+use raqote::{DrawOptions, DrawTarget, IntPoint, IntRect, Point, SolidSource, Source};
 use raqote::Source::Solid;
 use syscall::{Event, Map, O_NONBLOCK, Packet, SchemeMut};
 
 use crate::config::Config;
-use crate::cursor::Cursor;
+// use crate::cursor::Cursor;
 use crate::display::{Display, InputEvent, SyncRect};
 use crate::frame::{Frame, FrameEvent, FrameOptions};
 use crate::plugin;
@@ -28,7 +28,7 @@ pub struct Compositor<'a, 'b> where 'b: 'a {
     pub displays: Vec<Display<'a>>,
     pub frames: HashMap<usize, Frame<'b>>,
     pub surface: DrawTarget,
-    pub cursor: Cursor,
+    pub cursor: Point2D<i32, UnknownUnit>,
     pub scheme: File,
 
     last_update: Instant,
@@ -72,7 +72,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
             displays,
             frames: HashMap::new(),
             surface,//: DrawTarget::new(max.0 - min.0, max.1 - min.1),
-            cursor: Cursor::new(min.0, max.0, min.1, max.1),
+            cursor: Point2D::new((max.0 - min.0) / 2, (max.1 - min.1) / 2),
             scheme: syscall::open(SCHEME_NAME, syscall::O_CREAT | syscall::O_RDWR | syscall::O_CLOEXEC | O_NONBLOCK)
                 .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
                 .unwrap_or_else(|_| {
@@ -98,17 +98,17 @@ impl<'a, 'b> Compositor<'a, 'b> {
 
         while let Ok(event) = self.input.try_recv() {
             match event.code {
-                11 => {
-                    let (a, b) = (event.a, event.b);
-
-                    self.cursor.move_cursor(a as i32, b as i32);
-                    self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
-                }
+                // 11 => {
+                //     let (a, b) = (event.a, event.b);
+                //
+                //     self.
+                //
+                //     // self.cursor.move_cursor(a as i32, b as i32);
+                //     // self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+                // }
                 _ => ()
             }
         }
-
-        self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
 
         self.displays.iter_mut().for_each(|i| i.sync(None));
         self.last_update = Instant::now();
@@ -158,7 +158,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
     }
 
     fn sync_frame(&mut self, frame: usize) {
-        dbg!("Syncing Frame {}", frame);
+        // dbg!("Syncing Frame {}", frame);
 
         if let Some(frame) = self.frames.get(&frame) {
             for i in &mut self.displays {
@@ -175,7 +175,7 @@ impl<'a, 'b> Compositor<'a, 'b> {
             }
         }
 
-        self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
+        // self.displays.iter_mut().for_each(|i| i.draw_cursor(&self.cursor));
     }
 
     fn update_frame(&mut self, id: usize) -> syscall::Result<()> {
