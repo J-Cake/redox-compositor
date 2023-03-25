@@ -18,7 +18,7 @@ mod config;
 mod bin;
 mod plugin;
 mod cursor;
-mod buffer;
+mod io;
 
 fn main() {
     redox_daemon::Daemon::new(move |daemon| {
